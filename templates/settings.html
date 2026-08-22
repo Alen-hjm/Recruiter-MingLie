@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% set active = "settings" %}
+{% block title %}设置 - 明猎{% endblock %}
+
+{% block content %}
+<div class="topbar">
+    <div class="topbar-left">
+        <h1>设置</h1>
+        <p>配置 AI 模型、Obsidian 知识库等参数</p>
+    </div>
+</div>
+
+<!-- LLM 配置 -->
+<div class="card" style="margin-bottom:16px">
+    <div class="card-header">
+        <div class="card-title">🤖 AI 模型配置</div>
+    </div>
+    <form id="llm-form">
+        <div class="form-group">
+            <label class="form-label">API Key *</label>
+            <input type="password" id="llm-key" class="form-input" placeholder="sk-xxx">
+            <div class="form-hint">DeepSeek API Key，从 <a href="https://platform.deepseek.com/" target="_blank" class="op-link">platform.deepseek.com</a> 获取</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div class="form-group">
+                <label class="form-label">Base URL</label>
+                <input type="text" id="llm-url" class="form-input" placeholder="https://api.deepseek.com">
+            </div>
+            <div class="form-group">
+                <label class="form-label">模型名称</label>
+                <input type="text" id="llm-model" class="form-input" placeholder="deepseek-chat">
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">保存模型配置</button>
+    </form>
+</div>
+
+<!-- Obsidian 知识库配置 -->
+<div class="card" style="margin-bottom:16px">
+    <div class="card-header">
+        <div class="card-title">📚 Obsidian 知识库</div>
+        <button class="btn btn-default btn-sm" onclick="checkKnowledge()">检查连接</button>
+    </div>
+    <form id="obsidian-form">
+        <div class="form-group">
+            <label class="form-label">知识库路径</label>
+            <input type="text" id="obsidian-kb" class="form-input" placeholder="C:\Users\xxx\Documents\Obsidian Vault\知识库">
+            <div class="form-hint">存放行业知识、评分指南等 .md 文件的文件夹</div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">岗位文件夹路径</label>
+            <input type="text" id="obsidian-job" class="form-input" placeholder="C:\Users\xxx\Documents\Obsidian Vault\岗位">
+            <div class="form-hint">面试反馈将自动同步到此文件夹的对应岗位笔记中</div>
+        </div>
+        <button type="submit" class="btn btn-primary">保存路径配置</button>
+    </form>
+    <div id="kb-status" style="display:none;margin-top:16px;padding:12px;border-radius:8px;font-size:13px"></div>
+</div>
+
+<!-- 默认配置 -->
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">⚙️ 默认配置</div>
+    </div>
+    <form id="default-form">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div class="form-group">
+                <label class="form-label">默认城市</label>
+                <input type="text" id="default-city" class="form-input" placeholder="上海">
+            </div>
+            <div class="form-group">
+                <label class="form-label">默认抓取页数</label>
+                <input type="number" id="default-pages" class="form-input" min="1" max="5" value="3">
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">保存默认配置</button>
+    </form>
+</div>
+
+<!-- Chrome 插件连接 -->
+<div class="card" style="margin-bottom:16px">
+    <div class="card-header">
+        <div class="card-title">🔌 Chrome 插件连接</div>
+    </div>
+    <div style="padding:4px 0">
+        <p style="color:#666;font-size:13px;margin-bottom:12px">安装「明猎」Chrome 插件后，在猎聘简历页一键评分。将下方 API Key 填入插件设置即可连接。</p>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <input type="text" id="extension-api-key" class="form-input" readonly style="font-family:monospace;font-size:13px;background:#f5f5f5">
+            <button onclick="copyApiKey()" class="btn" style="white-space:nowrap;padding:8px 16px">复制</button>
+        </div>
+        <div id="api-key-status" style="font-size:12px;color:#999"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadSettings() {
+    const resp = await api('/api/settings');
+    if (!resp.success) return;
+    const d = resp.data;
+
+    document.getElementById('llm-key').value = d.llm_api_key || '';
+    document.getElementById('llm-url').value = d.llm_base_url || 'https://api.deepseek.com';
+    document.getElementById('llm-model').value = d.llm_model || 'deepseek-chat';
+    document.getElementById('obsidian-kb').value = d.obsidian_kb_path || '';
+    document.getElementById('obsidian-job').value = d.obsidian_job_path || '';
+    document.getElementById('default-city').value = d.default_city || '上海';
+    document.getElementById('default-pages').value = d.default_pages || 3;
+}
+
+// 保存 LLM 配置
+document.getElementById('llm-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const resp = await api('/api/settings', {
+        method: 'POST',
+        body: JSON.stringify({
+            llm_api_key: document.getElementById('llm-key').value.trim(),
+            llm_base_url: document.getElementById('llm-url').value.trim(),
+            llm_model: document.getElementById('llm-model').value.trim(),
+        }),
+    });
+    toast(resp.success ? '模型配置已保存' : '保存失败', resp.success ? 'success' : 'error');
+});
+
+// 保存 Obsidian 路径
+document.getElementById('obsidian-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    // 规范化路径：将反斜杠替换为正斜杠
+    let kbPath = document.getElementById('obsidian-kb').value.trim().replace(/\\/g, '/');
+    let jobPath = document.getElementById('obsidian-job').value.trim().replace(/\\/g, '/');
+    
+    const resp = await api('/api/settings', {
+        method: 'POST',
+        body: JSON.stringify({
+            obsidian_kb_path: kbPath,
+            obsidian_job_path: jobPath,
+        }),
+    });
+    toast(resp.success ? '路径配置已保存' : '保存失败', resp.success ? 'success' : 'error');
+});
+
+// 保存默认配置
+document.getElementById('default-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const resp = await api('/api/settings', {
+        method: 'POST',
+        body: JSON.stringify({
+            default_city: document.getElementById('default-city').value.trim(),
+            default_pages: parseInt(document.getElementById('default-pages').value) || 3,
+        }),
+    });
+    toast(resp.success ? '默认配置已保存' : '保存失败', resp.success ? 'success' : 'error');
+});
+
+// 检查知识库连接
+async function checkKnowledge() {
+    const statusEl = document.getElementById('kb-status');
+    statusEl.style.display = 'block';
+    statusEl.style.background = '#f0f7ff';
+    statusEl.style.color = 'var(--primary)';
+    statusEl.innerHTML = '🔄 检查中...';
+
+    const resp = await api('/api/knowledge/status');
+    if (!resp.success) {
+        statusEl.style.background = '#fff0f0';
+        statusEl.style.color = 'var(--danger)';
+        statusEl.innerHTML = '❌ 请求失败';
+        return;
+    }
+
+    const d = resp.data;
+    let html = '';
+
+    if (d.kb_path) {
+        if (d.kb_exists) {
+            html += `✅ 知识库已连接：${d.kb_path}<br>`;
+            html += `📄 找到 <strong>${d.kb_notes}</strong> 篇带 frontmatter 的笔记`;
+        } else {
+            html += `❌ 知识库路径不存在：${d.kb_path}`;
+        }
+    } else {
+        html += `⚠️ 未配置知识库路径`;
+    }
+
+    html += '<br>';
+
+    if (d.job_path) {
+        if (d.job_exists) {
+            html += `✅ 岗位文件夹已连接：${d.job_path}`;
+        } else {
+            html += `❌ 岗位文件夹不存在：${d.job_path}`;
+        }
+    } else {
+        html += `⚠️ 未配置岗位文件夹路径`;
+    }
+
+    statusEl.style.background = (d.kb_exists && d.job_exists) ? '#e6f9ee' : '#fff8e6';
+    statusEl.style.color = (d.kb_exists && d.job_exists) ? '#1a8a4a' : '#b26a00';
+    statusEl.innerHTML = html;
+}
+
+loadSettings();
+
+// 加载插件 API Key
+async function loadApiKey() {
+    const resp = await api('/api/my-api-key');
+    const el = document.getElementById('extension-api-key');
+    const status = document.getElementById('api-key-status');
+    if (resp.success && resp.api_key) {
+        el.value = resp.api_key;
+    } else {
+        el.value = '请先填写上方的 LLM API Key';
+        status.textContent = '保存 LLM API Key 后此处会自动显示';
+        status.style.color = '#b26a00';
+    }
+}
+
+function copyApiKey() {
+    const el = document.getElementById('extension-api-key');
+    el.select();
+    document.execCommand('copy');
+    const status = document.getElementById('api-key-status');
+    status.textContent = '已复制！粘贴到 Chrome 插件设置中即可';
+    status.style.color = '#1a8a4a';
+    setTimeout(() => { status.textContent = ''; }, 3000);
+}
+
+loadApiKey();
+</script>
+{% endblock %}

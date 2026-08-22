@@ -1,0 +1,273 @@
+{% extends "base.html" %}
+{% set active = "report" %}
+{% block title %}评分报告 - 明猎{% endblock %}
+
+{% block content %}
+<div class="topbar">
+    <div class="topbar-left">
+        <h1>评分报告</h1>
+        <p>查看 AI 评分结果和候选人排名</p>
+    </div>
+    <div class="topbar-right" id="report-actions" style="display:none">
+        <button class="btn btn-default" onclick="exportReport()">📥 导出报告</button>
+    </div>
+</div>
+
+<!-- 选择任务 -->
+<div class="card" style="margin-bottom:16px">
+    <div style="display:flex;gap:12px;align-items:center">
+        <label style="font-size:13px;color:var(--text-2);white-space:nowrap">选择评分任务：</label>
+        <select id="task-select" class="form-select" style="max-width:400px" onchange="loadReport()">
+            <option value="">加载中...</option>
+        </select>
+    </div>
+</div>
+
+<div id="report-area" style="display:none">
+    <!-- 统计概览 -->
+    <div class="stats" id="report-stats" style="margin-bottom:16px">
+        <div class="stat-card" style="border-left:4px solid var(--primary)">
+            <div class="stat-label">总评分</div>
+            <div class="stat-value" id="r-total">-</div>
+        </div>
+        <div class="stat-card" style="border-left:4px solid var(--success)">
+            <div class="stat-label">通过</div>
+            <div class="stat-value" id="r-passed" style="color:var(--success)">-</div>
+        </div>
+        <div class="stat-card" style="border-left:4px solid var(--danger)">
+            <div class="stat-label">不通过</div>
+            <div class="stat-value" id="r-failed" style="color:var(--danger)">-</div>
+        </div>
+        <div class="stat-card" style="border-left:4px solid var(--warning)">
+            <div class="stat-label">通过率</div>
+            <div class="stat-value" id="r-rate" style="color:var(--warning)">-</div>
+        </div>
+    </div>
+
+    <!-- 候选人排名 -->
+    <div class="card" style="margin-bottom:16px">
+        <div class="card-header">
+            <div class="card-title">🏆 候选人排名</div>
+            <div style="display:flex;gap:8px">
+                <select class="form-select" style="width:120px" id="rank-filter" onchange="filterRanking()">
+                    <option value="">全部</option>
+                    <option value="pass">通过</option>
+                    <option value="fail">不通过</option>
+                </select>
+            </div>
+        </div>
+        <div id="ranking-table"></div>
+    </div>
+
+    <!-- 详细报告 -->
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title">📄 详细报告</div>
+        </div>
+        <div id="detail-report" style="font-size:13px;line-height:1.8;color:var(--text-2);padding:16px"></div>
+    </div>
+</div>
+
+<div id="report-empty" class="card">
+    <div class="empty">
+        <p>选择一个评分任务查看报告</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+    .tag-req-pass {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        background: #e6f9ee;
+        color: #1a8a4a;
+        border: 1px solid #b7ebc9;
+        margin: 2px 4px 2px 0;
+        white-space: nowrap;
+    }
+    .tag-req-fail {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        background: #fff0f0;
+        color: #d4380d;
+        border: 1px solid #ffccc7;
+        margin: 2px 4px 2px 0;
+        white-space: nowrap;
+    }
+    .req-fail-text {
+        color: #d4380d;
+        font-weight: 600;
+    }
+</style>
+<script>
+let currentScored = [];
+let currentMode = '100';
+
+async function loadTasks() {
+    const resp = await api('/api/score/list');
+    const sel = document.getElementById('task-select');
+    sel.innerHTML = '<option value="">请选择评分任务</option>';
+    if (resp.success) {
+        resp.data.filter(t => t.status === 'done').forEach(t => {
+            sel.innerHTML += `<option value="${t.id}">${t.job_name||'未命名'} · ${t.mode}分制 · ${t.passed_count}/${t.total_count} 通过 · ${new Date(t.created_at).toLocaleDateString()}</option>`;
+        });
+    }
+
+    const params = new URLSearchParams(location.search);
+    const id = params.get('id');
+    if (id) {
+        sel.value = id;
+        loadReport();
+    }
+}
+
+async function loadReport() {
+    const taskId = document.getElementById('task-select').value;
+    if (!taskId) {
+        document.getElementById('report-area').style.display = 'none';
+        document.getElementById('report-empty').style.display = 'block';
+        document.getElementById('report-actions').style.display = 'none';
+        return;
+    }
+
+    const [reportResp, scoreResp] = await Promise.all([
+        api('/api/report/' + taskId),
+        api('/api/score/' + taskId),
+    ]);
+
+    if (!reportResp.success) { toast(reportResp.error, 'error'); return; }
+
+    document.getElementById('report-area').style.display = 'block';
+    document.getElementById('report-empty').style.display = 'none';
+    document.getElementById('report-actions').style.display = 'flex';
+
+    const {report, mode} = reportResp.data;
+    currentMode = mode;
+
+    // 统计
+    if (scoreResp.success && scoreResp.data.scored) {
+        currentScored = scoreResp.data.scored;
+        const valid = currentScored.filter(r => !r._error);
+        const passed = valid.filter(r => (r.score100 || {}).pass).length;
+        const failed = valid.length - passed;
+        const rate = valid.length > 0 ? Math.round(passed / valid.length * 100) : 0;
+
+        document.getElementById('r-total').textContent = valid.length;
+        document.getElementById('r-passed').textContent = passed;
+        document.getElementById('r-failed').textContent = failed;
+        document.getElementById('r-rate').textContent = rate + '%';
+
+        renderRanking(currentScored, mode);
+    }
+
+    document.getElementById('detail-report').innerHTML = renderMarkdown(report);
+}
+
+function renderRanking(scored, mode) {
+    const valid = scored.filter(r => !r._error);
+    valid.sort((a, b) => {
+        const sa = (a.score100 || a.analysis || {}).total_score || 0;
+        const sb = (b.score100 || b.analysis || {}).total_score || 0;
+        return sb - sa;
+    });
+
+    const filter = document.getElementById('rank-filter').value;
+    let filtered = valid;
+    if (filter === 'pass') filtered = valid.filter(r => (r.score100 || {}).pass);
+    if (filter === 'fail') filtered = valid.filter(r => !(r.score100 || {}).pass);
+
+    let html = '<table><thead><tr><th>#</th><th>候选人</th><th>总分</th><th>学历</th><th>经验</th><th>硬技能</th><th>硬需求</th><th>状态</th><th>推荐</th><th>亮点</th></tr></thead><tbody>';
+    filtered.forEach((r, i) => {
+        const name = r.name || r.title || `候选人${i+1}`;
+        const s = r.score100 || r.analysis || {};
+        const score = s.total_score || 0;
+        const cls = score >= 80 ? 'score-high' : score >= 60 ? 'score-mid' : 'score-low';
+        const scores = s.scores || {};
+        const edu = scores.education ? scores.education.score + '/' + scores.education.max : '-';
+        const exp = scores.experience ? scores.experience.score + '/' + scores.experience.max : '-';
+        const hard = scores.hard_skills ? scores.hard_skills.score + '/' + scores.hard_skills.max : '-';
+        const tag = mode === '100' ? (s.pass ? 'tag-pass' : 'tag-fail') : (score >= 7 ? 'tag-pass' : score >= 5 ? 'tag-wait' : 'tag-fail');
+        const rec = s.recommendation || '-';
+        const highlights = (s.highlights || []).slice(0, 2).join(', ') || '-';
+
+        // 硬需求 tag
+        let reqHtml = '-';
+        const hardReqs = s.hard_requirements_met || [];
+        if (hardReqs.length > 0) {
+            reqHtml = hardReqs.map(req => {
+                const met = req.met;
+                const label = req.requirement || '';
+                const shortLabel = label.length > 12 ? label.substring(0, 12) + '…' : label;
+                return met
+                    ? `<span class="tag-req-pass" title="${label}">✓ ${shortLabel}</span>`
+                    : `<span class="tag-req-fail" title="${req.detail || label}">✗ ${shortLabel}</span>`;
+            }).join('');
+        }
+
+        html += `<tr>
+            <td style="color:var(--text-4)">${i+1}</td>
+            <td style="font-weight:500">${name}</td>
+            <td><span class="score-pill ${cls}">${score}${mode==='100'?'分':''}</span></td>
+            <td style="font-size:12px">${edu}</td>
+            <td style="font-size:12px">${exp}</td>
+            <td style="font-size:12px">${hard}</td>
+            <td style="font-size:11px;max-width:260px">${reqHtml}</td>
+            <td><span class="tag ${tag}">${mode==='100'?(s.pass?'通过':'不通过'):(score>=7?'推荐':score>=5?'观望':'不合适')}</span></td>
+            <td style="font-size:12px">${rec}</td>
+            <td style="font-size:12px;color:var(--text-3);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${highlights}</td>
+        </tr>`;
+    });
+    html += '</tbody></table>';
+    document.getElementById('ranking-table').innerHTML = html;
+}
+
+function filterRanking() {
+    renderRanking(currentScored, currentMode);
+}
+
+function renderMarkdown(md) {
+    return md
+        .replace(/^### (.+)$/gm, '<h4 style="margin:16px 0 8px;color:var(--text-1)">$1</h4>')
+        .replace(/^## (.+)$/gm, '<h3 style="margin:20px 0 10px;color:var(--text-1);padding-bottom:8px;border-bottom:1px solid var(--border)">$1</h3>')
+        .replace(/^# (.+)$/gm, '<h2 style="margin:24px 0 12px;color:var(--text-1)">$1</h2>')
+        .replace(/^---$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">')
+        // 链接
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:none;border-bottom:1px dashed var(--primary)">$1</a>')
+        // 硬需求 tag（✓ / ✗ 开头的行）
+        .replace(/^- ✓ (.+)$/gm, '<span class="tag-req-pass">✓ $1</span>')
+        .replace(/^- ✗ (.+)$/gm, '<span class="tag-req-fail">✗ $1</span>')
+        // 不满足的文字标红
+        .replace(/不满足/g, '<span class="req-fail-text">不满足</span>')
+        .replace(/不及格/g, '<span class="req-fail-text">不及格</span>')
+        // 列表
+        .replace(/^- \*\*(.+?)\*\*: (.+)$/gm, '<div style="margin:4px 0"><strong>$1</strong>: $2</div>')
+        .replace(/^- (.+)$/gm, '<div style="margin:2px 0;padding-left:12px">• $1</div>')
+        .replace(/^\s{2}- (.+)$/gm, '<div style="margin:2px 0;padding-left:24px;font-size:12px">◦ $1</div>')
+        // 粗体
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        // 引用
+        .replace(/^> (.+)$/gm, '<blockquote style="border-left:3px solid var(--primary);padding:6px 12px;margin:8px 0;background:#f8f9fa;color:var(--text-2);font-size:12px">$1</blockquote>')
+        .replace(/\n\n/g, '<br><br>')
+        .replace(/\n/g, '<br>');
+}
+
+function exportReport() {
+    const taskId = document.getElementById('task-select').value;
+    if (!taskId) return;
+    const content = document.getElementById('detail-report').innerText;
+    const blob = new Blob([content], {type: 'text/plain;charset=utf-8'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `评分报告_${new Date().toISOString().slice(0,10)}.txt`;
+    a.click();
+    toast('报告已导出', 'success');
+}
+
+loadTasks();
+</script>
+{% endblock %}

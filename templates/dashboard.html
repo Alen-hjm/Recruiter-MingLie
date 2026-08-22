@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% set active = "dashboard" %}
+{% block title %}首页 - 明猎{% endblock %}
+
+{% block content %}
+<div class="topbar">
+    <div class="topbar-left">
+        <h1>数据概览</h1>
+        <p>● 实时监控中心 · <span id="currentDate"></span></p>
+    </div>
+    <div class="topbar-right">
+        <button class="btn btn-default" onclick="loadStats()">🔄 刷新</button>
+        <a href="/scrape" class="btn btn-primary">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            新建抓取
+        </a>
+    </div>
+</div>
+
+<!-- 核心指标 -->
+<div class="stats" id="stats">
+    <div class="stat-card" style="border-left:4px solid var(--primary)">
+        <div class="stat-header"><div class="stat-label">📄 简历总量</div></div>
+        <div class="stat-value" id="stat-scraped">-</div>
+        <div class="stat-footer">累计抓取</div>
+    </div>
+    <div class="stat-card" style="border-left:4px solid var(--success)">
+        <div class="stat-header"><div class="stat-label">✅ 已评分</div></div>
+        <div class="stat-value" id="stat-scored">-</div>
+        <div class="stat-footer">次评分任务</div>
+    </div>
+    <div class="stat-card" style="border-left:4px solid var(--warning)">
+        <div class="stat-header"><div class="stat-label">🚀 推荐面试</div></div>
+        <div class="stat-value" id="stat-passed">-</div>
+        <div class="stat-footer">人通过筛选</div>
+    </div>
+    <div class="stat-card" style="border-left:4px solid var(--danger)">
+        <div class="stat-header"><div class="stat-label">⏳ 待处理</div></div>
+        <div class="stat-value" id="stat-pending">-</div>
+        <div class="stat-footer">待评分简历</div>
+    </div>
+</div>
+
+<!-- 岗位简历分布 -->
+<div class="card" style="margin-bottom:16px">
+    <div class="card-header">
+        <div class="card-title">📊 岗位简历分布</div>
+    </div>
+    <div id="jobResumeChart"></div>
+</div>
+
+<!-- 待处理事项 & 最近评分 -->
+<div class="content-grid content-grid-1-1">
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title">⚡ 待处理事项</div>
+        </div>
+        <div id="pendingActions"></div>
+    </div>
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title">📋 最近评分</div>
+            <a href="/score" class="op-link">查看全部 →</a>
+        </div>
+        <div id="recentScores"></div>
+    </div>
+</div>
+
+<!-- 最近抓取记录 -->
+<div class="card" style="margin-top:16px">
+    <div class="card-header">
+        <div class="card-title">🔍 最近抓取记录</div>
+        <a href="/scrape" class="op-link">查看全部 →</a>
+    </div>
+    <div id="recentScrapes"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('currentDate').textContent = new Date().toLocaleDateString('zh-CN', {year:'numeric',month:'long',day:'numeric',weekday:'long'});
+
+async function loadStats() {
+    const resp = await api('/api/stats');
+    if (!resp.success) return;
+    const d = resp.data;
+
+    document.getElementById('stat-scraped').textContent = d.total_scraped;
+    document.getElementById('stat-scored').textContent = d.total_scored;
+    document.getElementById('stat-passed').textContent = d.total_passed;
+    document.getElementById('stat-pending').textContent = d.pending_score;
+
+    // 岗位分布
+    const jobsResp = await api('/api/jobs');
+    const chartEl = document.getElementById('jobResumeChart');
+    if (jobsResp.success && jobsResp.data.length > 0) {
+        chartEl.innerHTML = jobsResp.data.map(j => {
+            const count = d.recent_scrapes.filter(s => s.keyword && j.keyword && s.keyword.includes(j.keyword)).length;
+            const pct = Math.min(count * 20 + 30, 100);
+            return `<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+                <div style="min-width:120px;font-size:13px;color:var(--text-2);text-align:right">${j.name}</div>
+                <div style="flex:1;height:24px;background:#f0f2f5;border-radius:4px;overflow:hidden;position:relative">
+                    <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,var(--primary),var(--primary-light));border-radius:4px;transition:width 0.6s"></div>
+                </div>
+                <div style="min-width:40px;font-size:13px;font-weight:600;color:var(--text-1)">${count}</div>
+            </div>`;
+        }).join('');
+    } else {
+        chartEl.innerHTML = '<div class="empty"><p>还没有配置岗位，去<a href="/jobs" class="op-link">岗位管理</a>创建</p></div>';
+    }
+
+    // 待处理事项
+    const pendingEl = document.getElementById('pendingActions');
+    const unScored = d.recent_scrapes.filter(s => s.status === 'done' && !d.recent_scores.some(sc => sc.scrape_task_id === s.id));
+    if (unScored.length > 0) {
+        pendingEl.innerHTML = unScored.map(t => `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #f2f3f5">
+            <div>
+                <div style="font-size:13px;font-weight:500;color:var(--text-1)">${t.keyword} · ${t.city||'-'}</div>
+                <div style="font-size:12px;color:var(--text-4)">${t.result_count} 份简历待评分</div>
+            </div>
+            <a href="/score" class="btn btn-sm btn-primary">去评分</a>
+        </div>`).join('');
+    } else {
+        pendingEl.innerHTML = '<div class="empty"><p>暂无待处理事项 ✓</p></div>';
+    }
+
+    // 最近评分
+    const scoresEl = document.getElementById('recentScores');
+    if (d.recent_scores.length > 0) {
+        scoresEl.innerHTML = d.recent_scores.map(t => `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #f2f3f5">
+            <div>
+                <div style="font-size:13px;font-weight:500;color:var(--text-1)">${t.job_name||'未命名岗位'}</div>
+                <div style="font-size:12px;color:var(--text-4)">${t.mode}分制 · ${new Date(t.created_at).toLocaleDateString()}</div>
+            </div>
+            <div>
+                <span class="tag ${t.status==='done'?'tag-pass':t.status==='error'?'tag-fail':'tag-running'}">${t.status==='done'?t.passed_count+'/'+t.total_count+' 通过':t.status==='error'?'失败':'进行中'}</span>
+                ${t.status==='done'?`<a href="/report?id=${t.id}" class="op-link" style="margin-left:8px">报告</a>`:''}
+            </div>
+        </div>`).join('');
+    } else {
+        scoresEl.innerHTML = '<div class="empty"><p>暂无评分记录</p></div>';
+    }
+
+    // 最近抓取
+    const scrapesEl = document.getElementById('recentScrapes');
+    if (d.recent_scrapes.length > 0) {
+        scrapesEl.innerHTML = '<table><thead><tr><th>关键词</th><th>城市</th><th>平台</th><th>数量</th><th>状态</th><th>时间</th><th>操作</th></tr></thead><tbody>' +
+            d.recent_scrapes.map(t => `<tr>
+                <td style="font-weight:500">${t.keyword}</td>
+                <td style="color:var(--text-3)">${t.city||'-'}</td>
+                <td style="color:var(--text-3)">${t.platform||'liepin'}</td>
+                <td>${t.result_count||'-'}</td>
+                <td><span class="tag ${t.status==='done'?'tag-pass':t.status==='error'?'tag-fail':'tag-running'}">${t.status==='done'?'已完成':t.status==='error'?'失败':'进行中'}</span></td>
+                <td style="color:var(--text-4);font-size:12px">${new Date(t.created_at).toLocaleString()}</td>
+                <td>${t.status==='done'?`<a href="/score" class="op-link">评分</a>`:'-'}</td>
+            </tr>`).join('') + '</tbody></table>';
+    } else {
+        scrapesEl.innerHTML = '<div class="empty"><p>还没有抓取记录，去<a href="/scrape" class="op-link">简历抓取</a>开始</p></div>';
+    }
+}
+
+loadStats();
+</script>
+{% endblock %}

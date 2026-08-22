@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}明猎{% endblock %}</title>
+<link rel="stylesheet" href="/static/css/style.css">
+{% block head %}{% endblock %}
+</head>
+<body>
+<div class="sidebar">
+    <a href="/" class="logo" style="text-decoration:none">
+        <div class="logo-icon">猎</div>
+        <div>明猎<div class="logo-sub">AI Recruitment</div></div>
+    </a>
+    <div class="nav-section">工作台</div>
+    <a href="/agent" class="nav-item {% if active == 'agent' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+        AI 助手
+    </a>
+    <a href="/" class="nav-item {% if active == 'dashboard' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        仪表盘
+    </a>
+    <a href="/scrape" class="nav-item {% if active == 'scrape' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        简历抓取
+    </a>
+    <a href="/score" class="nav-item {% if active == 'score' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+        AI 评分
+    </a>
+    <a href="/candidates" class="nav-item {% if active == 'candidates' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m22 21-3-3"/></svg>
+        候选人管理
+    </a>
+    <a href="/report" class="nav-item {% if active == 'report' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
+        评分报告
+    </a>
+    <div class="nav-section">配置</div>
+    <a href="/jobs" class="nav-item {% if active == 'jobs' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+        岗位管理
+    </a>
+    <a href="/interview" class="nav-item {% if active == 'interview' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        面试管理
+    </a>
+    <a href="/logs" class="nav-item {% if active == 'logs' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        运行日志
+    </a>
+    <div class="nav-section">系统</div>
+    <a href="/settings" class="nav-item {% if active == 'settings' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+        设置
+    </a>
+    <div class="sidebar-footer">
+        <div class="sidebar-user">
+            <div class="sidebar-avatar">{{ current_user.display_name[0] if current_user.display_name else '?' }}</div>
+            <div class="sidebar-username">{{ current_user.display_name }}</div>
+            <a href="/logout" class="op-link" style="margin-left:auto;font-size:12px">退出</a>
+        </div>
+    </div>
+</div>
+
+<div class="main">
+    {% block content %}{% endblock %}
+</div>
+
+<script>
+function toast(msg, type='info') {
+    const el = document.createElement('div');
+    el.className = 'toast toast-' + type;
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 3000);
+}
+
+async function api(url, options={}) {
+    const resp = await fetch(url, {
+        headers: {'Content-Type': 'application/json'},
+        ...options,
+    });
+    return resp.json();
+}
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

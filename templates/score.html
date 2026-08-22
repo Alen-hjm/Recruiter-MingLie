@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% set active = "score" %}
+{% block title %}AI 评分 - 明猎{% endblock %}
+
+{% block content %}
+<div class="topbar">
+    <div class="topbar-left">
+        <h1>AI 评分</h1>
+        <p>选择岗位，对该岗位下的简历进行 AI 智能评分</p>
+    </div>
+</div>
+
+<!-- 评分配置 -->
+<div class="card" style="margin-bottom:16px">
+    <div class="card-header">
+        <div class="card-title">⭐ 评分配置</div>
+    </div>
+    <form id="score-form">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div class="form-group">
+                <label class="form-label">选择岗位 *</label>
+                <select id="job-select" class="form-select" required onchange="onJobChange()">
+                    <option value="">请选择岗位</option>
+                </select>
+                <div class="form-hint">只评分未评过的简历，已评过的自动跳过</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">评分模式</label>
+                <select id="score-mode" class="form-select">
+                    <option value="100" selected>100 分制（推荐，区分硬需求/软需求）</option>
+                    <option value="10">10 分制（快速筛选）</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">岗位描述</label>
+            <textarea id="job-desc" class="form-textarea" rows="5" placeholder="选择岗位后自动填入" readonly style="background:#f9fafb"></textarea>
+            <div class="form-hint">来自岗位配置，如需修改请去<a href="/jobs" class="op-link">岗位管理</a></div>
+        </div>
+        <div id="resume-preview" style="display:none;margin-bottom:16px;padding:12px;background:#f0f7ff;border-radius:8px;font-size:13px;color:var(--primary)">
+            📄 该岗位下有 <strong id="resume-count">0</strong> 份简历待评分
+            <span id="skip-info" style="display:none;margin-left:12px;color:var(--text-3)">（<strong id="skip-count">0</strong> 份已评过，将跳过）</span>
+        </div>
+        <div style="display:flex;gap:12px">
+            <button type="submit" class="btn btn-primary btn-lg" id="btn-score">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+                开始评分
+            </button>
+        </div>
+    </form>
+    <div id="score-progress" style="display:none;margin-top:20px;padding:16px;background:#f9fafb;border-radius:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div class="loading"><div class="spinner"></div> <span id="progress-text">AI 评分中...</span></div>
+            <span id="progress-count" style="font-size:13px;color:var(--text-3)"></span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" id="progress-bar" style="width:0%"></div></div>
+    </div>
+</div>
+
+<!-- 评分历史 -->
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">📋 评分历史</div>
+        <input type="text" class="form-input" style="width:200px" placeholder="搜索岗位..." id="history-search" oninput="filterHistory()">
+    </div>
+    <div id="score-history">
+        <div class="empty"><p>加载中...</p></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentTaskId = null;
+let pollTimer = null;
+let allHistory = [];
+let allJobs = [];
+
+async function loadJobs() {
+    const resp = await api('/api/jobs');
+    const sel = document.getElementById('job-select');
+    sel.innerHTML = '<option value="">请选择岗位</option>';
+    allJobs = resp.success ? resp.data : [];
+    allJobs.forEach(j => {
+        sel.innerHTML += `<option value="${j.id}" data-desc="${(j.job_description||'').replace(/"/g,'&quot;')}" data-count="${j.resume_count||0}">${j.name} · ${j.resume_count||0}份简历</option>`;
+    });
+}
+
+function onJobChange() {
+    const sel = document.getElementById('job-select');
+    const opt = sel.options[sel.selectedIndex];
+    const desc = opt.dataset.desc || '';
+    const count = opt.dataset.count || 0;
+
+    document.getElementById('job-desc').value = desc;
+
+    const preview = document.getElementById('resume-preview');
+    if (sel.value && count > 0) {
+        document.getElementById('resume-count').textContent = count;
+        preview.style.display = 'block';
+    } else {
+        preview.style.display = 'none';
+    }
+}
+
+async function loadHistory() {
+    const resp = await api('/api/score/list');
+    if (!resp.success) return;
+    allHistory = resp.data;
+    renderHistory(allHistory);
+}
+
+function renderHistory(tasks) {
+    const el = document.getElementById('score-history');
+    if (tasks.length === 0) {
+        el.innerHTML = '<div class="empty"><p>还没有评分记录</p></div>';
+        return;
+    }
+    el.innerHTML = '<table><thead><tr><th>岗位</th><th>模式</th><th>通过</th><th>状态</th><th>时间</th><th>操作</th></tr></thead><tbody>' +
+        tasks.map(t => `<tr>
+            <td style="font-weight:500">${t.job_name||'未命名岗位'}</td>
+            <td><span class="tag tag-running">${t.mode}分制</span></td>
+            <td>${t.status==='done'?`<span style="color:var(--success);font-weight:600">${t.passed_count}</span> / ${t.total_count}`:'-'}</td>
+            <td><span class="tag ${t.status==='done'?'tag-pass':t.status==='error'?'tag-fail':t.status==='running'?'tag-running':'tag-wait'}">
+                ${t.status==='done'?'已完成':t.status==='error'?'失败':t.status==='running'?'评分中':'等待中'}
+            </span></td>
+            <td style="color:var(--text-4);font-size:12px">${new Date(t.created_at).toLocaleString()}</td>
+            <td>${t.status==='done'?`<a href="/report?id=${t.id}" class="op-link">查看报告</a>`:'-'}</td>
+        </tr>`).join('') + '</tbody></table>';
+}
+
+function filterHistory() {
+    const q = document.getElementById('history-search').value.trim().toLowerCase();
+    if (!q) { renderHistory(allHistory); return; }
+    renderHistory(allHistory.filter(t => (t.job_name||'').toLowerCase().includes(q)));
+}
+
+document.getElementById('score-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const jobId = document.getElementById('job-select').value;
+    const mode = document.getElementById('score-mode').value;
+
+    if (!jobId) { toast('请选择岗位', 'error'); return; }
+
+    const btn = document.getElementById('btn-score');
+    btn.disabled = true;
+
+    const resp = await api('/api/score', {
+        method: 'POST',
+        body: JSON.stringify({job_id: parseInt(jobId), mode: mode}),
+    });
+
+    if (resp.success) {
+        currentTaskId = resp.task_id;
+        document.getElementById('score-progress').style.display = 'block';
+
+        // 显示跳过信息
+        let progressMsg = `AI 评分中，共 ${resp.resume_count} 份简历...`;
+        if (resp.skipped > 0) {
+            progressMsg = `AI 评分中，${resp.resume_count} 份新简历（跳过 ${resp.skipped} 份已评过的）...`;
+        }
+        document.getElementById('progress-text').textContent = progressMsg;
+        document.getElementById('progress-bar').style.width = '20%';
+
+        // 同时显示 toast
+        toast(resp.message || '评分任务已创建', 'success');
+
+        pollStatus();
+    } else {
+        toast(resp.error || '创建失败', 'error');
+    }
+
+    btn.disabled = false;
+});
+
+function pollStatus() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+        if (!currentTaskId) return;
+        const resp = await api('/api/score/' + currentTaskId);
+        if (!resp.success) return;
+        const d = resp.data;
+
+        if (d.status === 'running') {
+            document.getElementById('progress-text').textContent = 'AI 正在逐份评分...';
+            document.getElementById('progress-bar').style.width = '60%';
+        } else if (d.status === 'done') {
+            clearInterval(pollTimer);
+            document.getElementById('progress-text').textContent = '评分完成！';
+            document.getElementById('progress-count').textContent = `${d.passed_count}/${d.total_count} 通过`;
+            document.getElementById('progress-bar').style.width = '100%';
+            toast(`评分完成，${d.passed_count} 人通过`, 'success');
+            loadHistory();
+            loadJobs(); // 刷新简历数
+            currentTaskId = null;
+        } else if (d.status === 'error') {
+            clearInterval(pollTimer);
+            document.getElementById('progress-text').textContent = '评分失败: ' + (d.error_msg || '');
+            toast('评分失败', 'error');
+            loadHistory();
+            currentTaskId = null;
+        }
+    }, 3000);
+}
+
+loadJobs();
+loadHistory();
+</script>
+{% endblock %}

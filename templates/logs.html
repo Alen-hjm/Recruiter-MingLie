@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% set active = "logs" %}
+{% block title %}运行日志 - 明猎{% endblock %}
+
+{% block content %}
+<div class="topbar">
+    <div class="topbar-left">
+        <h1>运行日志</h1>
+        <p>查看抓取和评分任务的运行记录</p>
+    </div>
+    <div class="topbar-right">
+        <button class="btn btn-default" onclick="loadLogs()">🔄 刷新</button>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">📋 任务日志</div>
+        <div style="display:flex;gap:8px">
+            <select class="form-select" style="width:120px" id="log-type" onchange="filterLogs()">
+                <option value="">全部类型</option>
+                <option value="scrape">抓取</option>
+                <option value="score">评分</option>
+            </select>
+            <select class="form-select" style="width:120px" id="log-status" onchange="filterLogs()">
+                <option value="">全部状态</option>
+                <option value="done">成功</option>
+                <option value="error">失败</option>
+                <option value="running">运行中</option>
+            </select>
+        </div>
+    </div>
+    <div id="log-list"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allLogs = [];
+
+async function loadLogs() {
+    const [scrapes, scores] = await Promise.all([
+        api('/api/scrape/list'),
+        api('/api/score/list'),
+    ]);
+
+    allLogs = [];
+    if (scrapes.success) {
+        scrapes.data.forEach(t => {
+            allLogs.push({
+                type: 'scrape',
+                typeLabel: '简历抓取',
+                desc: `${t.keyword} · ${t.city||'-'}`,
+                status: t.status,
+                result: t.status === 'done' ? `${t.result_count} 份简历` : t.error_msg || '',
+                time: t.created_at,
+                detail: t,
+            });
+        });
+    }
+    if (scores.success) {
+        scores.data.forEach(t => {
+            allLogs.push({
+                type: 'score',
+                typeLabel: 'AI 评分',
+                desc: `${t.job_name||'未命名岗位'} · ${t.mode}分制`,
+                status: t.status,
+                result: t.status === 'done' ? `${t.passed_count}/${t.total_count} 通过` : t.error_msg || '',
+                time: t.created_at,
+                detail: t,
+            });
+        });
+    }
+
+    // 按时间排序
+    allLogs.sort((a, b) => new Date(b.time) - new Date(a.time));
+    filterLogs();
+}
+
+function filterLogs() {
+    const type = document.getElementById('log-type').value;
+    const status = document.getElementById('log-status').value;
+    let filtered = allLogs;
+    if (type) filtered = filtered.filter(l => l.type === type);
+    if (status) filtered = filtered.filter(l => l.status === status);
+    renderLogs(filtered);
+}
+
+function renderLogs(logs) {
+    const el = document.getElementById('log-list');
+    if (logs.length === 0) {
+        el.innerHTML = '<div class="empty"><p>暂无日志</p></div>';
+        return;
+    }
+
+    el.innerHTML = logs.map(l => {
+        const levelClass = l.status === 'done' ? 'tag-pass' : l.status === 'error' ? 'tag-fail' : 'tag-running';
+        const levelLabel = l.status === 'done' ? '成功' : l.status === 'error' ? '失败' : '运行中';
+        const icon = l.type === 'scrape' ? '🔍' : '⭐';
+        const link = l.type === 'score' && l.status === 'done' && l.detail.id ? `<a href="/report?id=${l.detail.id}" class="op-link" style="margin-left:12px">查看报告</a>` : '';
+
+        return `<div style="display:flex;gap:16px;padding:14px 0;border-bottom:1px solid #f2f3f5;align-items:flex-start">
+            <div style="min-width:140px;font-size:12px;color:var(--text-4)">${new Date(l.time).toLocaleString()}</div>
+            <div style="min-width:24px;font-size:16px">${icon}</div>
+            <div style="flex:1">
+                <div style="display:flex;align-items:center;gap:8px">
+                    <span class="tag ${l.type==='scrape'?'tag-running':'tag-pass'}" style="font-size:11px">${l.typeLabel}</span>
+                    <span style="font-size:13px;font-weight:500;color:var(--text-1)">${l.desc}</span>
+                    <span class="tag ${levelClass}" style="font-size:11px">${levelLabel}</span>
+                </div>
+                ${l.result?`<div style="font-size:12px;color:var(--text-3);margin-top:4px">${l.result}</div>`:''}
+            </div>
+            ${link}
+        </div>`;
+    }).join('');
+}
+
+loadLogs();
+</script>
+{% endblock %}

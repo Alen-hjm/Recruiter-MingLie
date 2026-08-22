@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+{% set active = "scrape" %}
+{% block title %}简历抓取 - 明猎{% endblock %}
+
+{% block content %}
+<div class="topbar">
+    <div class="topbar-left">
+        <h1>简历抓取</h1>
+        <p>选择岗位，从猎聘抓取候选人简历</p>
+    </div>
+</div>
+
+<!-- 抓取配置 -->
+<div class="card" style="margin-bottom:16px">
+    <div class="card-header">
+        <div class="card-title">🔍 抓取配置</div>
+    </div>
+    <form id="scrape-form">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
+            <div class="form-group">
+                <label class="form-label">归属岗位 *</label>
+                <select id="job-select" class="form-select" required onchange="onJobChange()">
+                    <option value="">请选择岗位</option>
+                </select>
+                <div class="form-hint">简历将归入所选岗位</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">搜索关键词</label>
+                <input type="text" id="keyword-input" class="form-input" placeholder="选择岗位自动填入，也可手动输入">
+            </div>
+            <div class="form-group">
+                <label class="form-label">抓取页数</label>
+                <select id="max-pages" class="form-select">
+                    <option value="1">1 页（约 10 份）</option>
+                    <option value="2">2 页（约 20 份）</option>
+                    <option value="3" selected>3 页（约 30 份）</option>
+                    <option value="5">5 页（约 50 份，上限）</option>
+                </select>
+            </div>
+        </div>
+        <div style="display:flex;gap:12px;margin-top:16px">
+            <button type="submit" class="btn btn-primary btn-lg" id="btn-scrape">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                开始抓取
+            </button>
+            <a href="/jobs" class="btn btn-default btn-lg" target="_blank">+ 管理岗位</a>
+        </div>
+    </form>
+    <div id="scrape-progress" style="display:none;margin-top:20px;padding:16px;background:#f9fafb;border-radius:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div class="loading"><div class="spinner"></div> <span id="progress-text">正在抓取...</span></div>
+            <span id="progress-count" style="font-size:13px;color:var(--text-3)"></span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" id="progress-bar" style="width:0%"></div></div>
+    </div>
+</div>
+
+<!-- 岗位简历概览 -->
+<div class="card" style="margin-bottom:16px">
+    <div class="card-header">
+        <div class="card-title">📊 岗位简历概览</div>
+    </div>
+    <div id="job-overview"></div>
+</div>
+
+<!-- 抓取历史 -->
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">📋 抓取历史</div>
+        <input type="text" class="form-input" style="width:200px" placeholder="搜索关键词..." id="history-search" oninput="filterHistory()">
+    </div>
+    <div id="scrape-history">
+        <div class="empty"><p>加载中...</p></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentTaskId = null;
+let pollTimer = null;
+let allHistory = [];
+let allJobs = [];
+
+// 加载岗位列表
+async function loadJobs() {
+    const resp = await api('/api/jobs');
+    const sel = document.getElementById('job-select');
+    sel.innerHTML = '<option value="">请选择岗位</option>';
+    allJobs = resp.success ? resp.data : [];
+    allJobs.forEach(j => {
+        sel.innerHTML += `<option value="${j.id}">${j.name}${j.keyword?' ('+j.keyword+')':''} · ${j.resume_count||0}份简历</option>`;
+    });
+    renderJobOverview();
+}
+
+function onJobChange() {
+    const jobId = document.getElementById('job-select').value;
+    const job = allJobs.find(j => j.id == jobId);
+    const input = document.getElementById('keyword-input');
+    if (job && job.keyword) {
+        input.value = job.keyword;
+    } else {
+        input.value = '';
+        input.focus();
+    }
+}
+
+function renderJobOverview() {
+    const el = document.getElementById('job-overview');
+    if (allJobs.length === 0) {
+        el.innerHTML = '<div class="empty"><p>还没有岗位，去<a href="/jobs" class="op-link">岗位管理</a>创建</p></div>';
+        return;
+    }
+    el.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px">' +
+        allJobs.map(j => `<div style="padding:16px;background:#f9fafb;border-radius:8px;text-align:center">
+            <div style="font-size:13px;color:var(--text-3);margin-bottom:4px">${j.name}</div>
+            <div style="font-size:24px;font-weight:700;color:var(--text-1)">${j.resume_count||0}</div>
+            <div style="font-size:11px;color:var(--text-4);margin-top:2px">份简历</div>
+        </div>`).join('') + '</div>';
+}
+
+// 加载历史
+async function loadHistory() {
+    const resp = await api('/api/scrape/list');
+    if (!resp.success) return;
+    allHistory = resp.data;
+    renderHistory(allHistory);
+}
+
+function renderHistory(tasks) {
+    const el = document.getElementById('scrape-history');
+    if (tasks.length === 0) {
+        el.innerHTML = '<div class="empty"><p>还没有抓取记录</p></div>';
+        return;
+    }
+    el.innerHTML = '<table><thead><tr><th>关键词</th><th>归属岗位</th><th>城市</th><th>数量</th><th>状态</th><th>时间</th><th>操作</th></tr></thead><tbody>' +
+        tasks.map(t => {
+            const job = allJobs.find(j => j.id == t.job_id);
+            return `<tr>
+                <td style="font-weight:500">${t.keyword || '手动搜索'}</td>
+                <td style="color:var(--text-3)">${job?job.name:'-'}</td>
+                <td style="color:var(--text-3)">${t.city||'-'}</td>
+                <td>${t.result_count||'-'}</td>
+                <td><span class="tag ${t.status==='done'?'tag-pass':t.status==='error'?'tag-fail':t.status==='running'?'tag-running':'tag-wait'}">
+                    ${t.status==='done'?t.result_count+' 份':t.status==='error'?'失败':t.status==='running'?'抓取中':'等待中'}
+                </span></td>
+                <td style="color:var(--text-4);font-size:12px">${new Date(t.created_at).toLocaleString()}</td>
+                <td>${t.status==='done'?`<a href="/score" class="op-link">去评分</a>`:'-'}</td>
+            </tr>`;
+        }).join('') + '</tbody></table>';
+}
+
+function filterHistory() {
+    const q = document.getElementById('history-search').value.trim().toLowerCase();
+    if (!q) { renderHistory(allHistory); return; }
+    renderHistory(allHistory.filter(t => (t.keyword||'手动').toLowerCase().includes(q) || (t.city||'').toLowerCase().includes(q)));
+}
+
+// 提交抓取
+document.getElementById('scrape-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const jobId = document.getElementById('job-select').value;
+    const maxPages = parseInt(document.getElementById('max-pages').value);
+
+    if (!jobId) { toast('请选择归属岗位', 'error'); return; }
+
+    const btn = document.getElementById('btn-scrape');
+    const keyword = document.getElementById('keyword-input').value.trim();
+    btn.disabled = true;
+    btn.textContent = '提交中...';
+
+    const resp = await api('/api/scrape', {
+        method: 'POST',
+        body: JSON.stringify({
+            job_id: parseInt(jobId),
+            max_pages: maxPages,
+            platform: 'liepin',
+            keyword: keyword,
+            search_mode: keyword ? 'auto' : 'manual',
+        }),
+    });
+
+    if (resp.success) {
+        currentTaskId = resp.task_id;
+        document.getElementById('scrape-progress').style.display = 'block';
+        document.getElementById('progress-text').textContent = '任务已提交，浏览器即将弹出，请扫码登录...';
+        document.getElementById('progress-bar').style.width = '10%';
+        document.getElementById('progress-count').textContent = '';
+        pollStatus();
+        toast('抓取任务已创建', 'success');
+    } else {
+        toast(resp.error || '创建失败', 'error');
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg> 开始抓取';
+});
+
+function pollStatus() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+        if (!currentTaskId) return;
+        const resp = await api('/api/scrape/' + currentTaskId);
+        if (!resp.success) return;
+        const d = resp.data;
+
+        if (d.status === 'running') {
+            document.getElementById('progress-text').textContent = '正在抓取中，请稍候...';
+            document.getElementById('progress-bar').style.width = '50%';
+        } else if (d.status === 'done') {
+            clearInterval(pollTimer);
+            const msg = d.error_msg ? `抓取完成（${d.error_msg}）` : '抓取完成！';
+            document.getElementById('progress-text').textContent = msg;
+            document.getElementById('progress-count').textContent = `共 ${d.result_count} 份简历`;
+            document.getElementById('progress-bar').style.width = '100%';
+            toast(`抓取完成，共 ${d.result_count} 份简历`, 'success');
+            loadHistory();
+            loadJobs();
+            currentTaskId = null;
+        } else if (d.status === 'error') {
+            clearInterval(pollTimer);
+            document.getElementById('progress-text').textContent = '抓取失败: ' + (d.error_msg || '未知错误');
+            document.getElementById('progress-bar').style.width = '100%';
+            document.getElementById('progress-bar').style.background = 'var(--danger)';
+            toast('抓取失败', 'error');
+            loadHistory();
+            currentTaskId = null;
+        }
+    }, 3000);
+}
+
+loadJobs();
+loadHistory();
+</script>
+{% endblock %}

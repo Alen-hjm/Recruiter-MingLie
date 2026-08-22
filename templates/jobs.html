@@ -1,0 +1,550 @@
+{% extends "base.html" %}
+{% set active = "jobs" %}
+{% block title %}岗位管理 - 明猎{% endblock %}
+
+{% block content %}
+<div class="topbar">
+    <div class="topbar-left">
+        <h1>岗位管理</h1>
+        <p>配置招聘岗位，用于简历评分时的匹配标准</p>
+    </div>
+    <div class="topbar-right">
+        <button class="btn btn-primary" onclick="showModal()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            新建岗位
+        </button>
+    </div>
+</div>
+
+<div class="content-grid content-grid-full">
+    <div class="card">
+        <div id="jobs-list">
+            <div class="empty"><p>加载中...</p></div>
+        </div>
+    </div>
+</div>
+
+<!-- 简历列表 模态框 -->
+<style>
+    .tag-req-pass { display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;background:#e6f9ee;color:#1a8a4a;border:1px solid #b7ebc9;margin:1px 3px 1px 0;white-space:nowrap; }
+    .tag-req-fail { display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;background:#fff0f0;color:#d4380d;border:1px solid #ffccc7;margin:1px 3px 1px 0;white-space:nowrap; }
+    /* 管道视图样式 */
+    .pipeline-bar { display:flex;gap:4px;margin-bottom:16px;flex-wrap:wrap; }
+    .pipeline-bar-item { padding:8px 14px;border-radius:8px;text-align:center;min-width:80px;cursor:pointer;transition:all 0.2s;border:2px solid transparent; }
+    .pipeline-bar-item:hover { transform:translateY(-1px);box-shadow:0 2px 8px rgba(0,0,0,0.1); }
+    .pipeline-bar-item.active { border-color:var(--primary); }
+    .pipeline-bar-count { font-size:20px;font-weight:700; }
+    .pipeline-bar-label { font-size:11px;color:var(--text-3);margin-top:2px; }
+    .pipeline-card { display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border:1px solid #f0f0f0;border-radius:8px;margin-bottom:6px;transition:background 0.15s; }
+    .pipeline-card:hover { background:#f8f9fb; }
+    .pipeline-card-info { flex:1; }
+    .pipeline-card-name { font-weight:500;font-size:13px; }
+    .pipeline-card-meta { font-size:12px;color:var(--text-3);margin-top:2px; }
+    .pipeline-card-actions { display:flex;gap:4px;flex-wrap:wrap; }
+    .pipeline-card-actions .btn { font-size:11px;padding:3px 8px; }
+    .stage-recommended { background:#e6f9ee; }
+    .stage-contacted { background:#e8f4fd; }
+    .stage-submitted { background:#fff7e6; }
+    .stage-interview { background:#f0e6ff; }
+    .stage-offer { background:#e6ffe6; }
+    .stage-hired { background:#d4edda; }
+    .stage-rejected { background:#fff0f0; }
+</style>
+<div class="modal-overlay" id="resume-modal" style="display:none" onclick="if(event.target===this)hideResumeModal()">
+    <div class="modal" style="max-width:1200px;max-height:85vh;overflow:auto">
+        <div class="modal-header">
+            <div class="modal-title" id="resume-modal-title">岗位简历</div>
+            <button class="modal-close" onclick="hideResumeModal()">×</button>
+        </div>
+        <div id="resume-list">
+            <div class="empty"><p>加载中...</p></div>
+        </div>
+    </div>
+</div>
+
+<!-- 管道视图 模态框 -->
+<div class="modal-overlay" id="pipeline-modal" style="display:none" onclick="if(event.target===this)hidePipelineModal()">
+    <div class="modal" style="max-width:1000px;max-height:85vh;overflow:auto">
+        <div class="modal-header">
+            <div class="modal-title" id="pipeline-modal-title">候选人管道</div>
+            <button class="modal-close" onclick="hidePipelineModal()">×</button>
+        </div>
+        <div id="pipeline-content">
+            <div class="empty"><p>加载中...</p></div>
+        </div>
+    </div>
+</div>
+
+<!-- 状态更新 模态框 -->
+<div class="modal-overlay" id="status-modal" style="display:none" onclick="if(event.target===this)closeStatusModal()">
+    <div class="modal" style="max-width:480px">
+        <div class="modal-header">
+            <div class="modal-title">📋 更新候选人状态</div>
+            <button class="modal-close" onclick="closeStatusModal()">×</button>
+        </div>
+        <div style="margin-bottom:12px">
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+                <span style="color:var(--text-3)">候选人：</span>
+                <strong id="st-candidate">-</strong>
+            </div>
+            <div style="display:flex;justify-content:space-between">
+                <span style="color:var(--text-3)">AI评分：</span>
+                <span id="st-score">-</span>
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">新状态</label>
+            <select id="st-stage" class="form-input" onchange="onStageChange()">
+                <option value="">请选择</option>
+                <option value="contacted">📞 已电话联系</option>
+                <option value="submitted">📤 已推荐给甲方</option>
+                <option value="interview">🎤 进入面试</option>
+                <option value="offer">📋 发了Offer</option>
+                <option value="hired">✅ 已录用</option>
+                <option value="rejected">❌ 淘汰</option>
+            </select>
+        </div>
+        <div id="reject-fields" style="display:none">
+            <div class="form-group">
+                <label class="form-label">淘汰阶段</label>
+                <select id="st-reject-stage" class="form-input">
+                    <option value="phone_screen">电话筛选淘汰</option>
+                    <option value="client_reject">甲方淘汰</option>
+                    <option value="interview_reject">面试淘汰</option>
+                    <option value="offer_declined">候选人拒Offer</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">甲方公司（可选）</label>
+                <input type="text" id="st-company" class="form-input" placeholder="淘汰候选人的甲方公司名">
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">原因/备注 *</label>
+            <textarea id="st-reason" class="form-textarea" rows="3" placeholder="淘汰原因或进展备注，将同步到 Obsidian"></textarea>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button class="btn btn-default" onclick="closeStatusModal()">取消</button>
+            <button class="btn btn-primary" onclick="submitStatus()">提交并同步</button>
+        </div>
+    </div>
+</div>
+
+<!-- 新建/编辑岗位 模态框 -->
+<div class="modal-overlay" id="modal" style="display:none">
+    <div class="modal">
+        <div class="modal-header">
+            <div class="modal-title" id="modal-title">新建岗位</div>
+            <button class="modal-close" onclick="hideModal()">×</button>
+        </div>
+        <form id="job-form">
+            <input type="hidden" id="edit-id" value="">
+            <div class="form-group">
+                <label class="form-label">岗位名称 *</label>
+                <input type="text" id="job-name" class="form-input" placeholder="如：Python后端开发" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label">搜索关键词</label>
+                <input type="text" id="job-keyword" class="form-input" placeholder="如：Python开发（抓取时用的关键词）">
+            </div>
+            <div class="form-group">
+                <label class="form-label">岗位描述 *</label>
+                <textarea id="job-description" class="form-textarea" rows="8" placeholder="粘贴岗位职责和要求..."></textarea>
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">保存</button>
+                <button type="button" class="btn btn-default" onclick="hideModal()">取消</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── 岗位列表 ──
+async function loadJobs() {
+    const resp = await api('/api/jobs');
+    const el = document.getElementById('jobs-list');
+    if (!resp.success || resp.data.length === 0) {
+        el.innerHTML = '<div class="empty"><p>还没有配置岗位，点击右上角"新建岗位"开始</p></div>';
+        return;
+    }
+    el.innerHTML = '<table><thead><tr><th>岗位名称</th><th>关键词</th><th>简历数</th><th>描述预览</th><th>创建时间</th><th>操作</th></tr></thead><tbody>' +
+        resp.data.map(j => `<tr>
+            <td style="font-weight:500">${j.name}</td>
+            <td style="color:var(--text-3)">${j.keyword||'-'}</td>
+            <td><span class="tag tag-pass">${j.resume_count||0}</span></td>
+            <td style="color:var(--text-3);max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(j.job_description||'').substring(0,60)}</td>
+            <td style="color:var(--text-4);font-size:12px">${new Date(j.created_at).toLocaleDateString()}</td>
+            <td>
+                <span class="op-link" onclick="viewPipeline(${j.id},'${j.name.replace(/'/g,"\\'")}')">📊 管道</span>
+                <span style="margin:0 6px;color:var(--border)">|</span>
+                <span class="op-link" onclick="viewResumes(${j.id},'${j.name.replace(/'/g,"\\'")}')">查看简历</span>
+                <span style="margin:0 6px;color:var(--border)">|</span>
+                <span class="op-link" onclick="editJob(${j.id},'${j.name.replace(/'/g,"\\'")}','${(j.keyword||'').replace(/'/g,"\\'")}','${(j.job_description||'').replace(/'/g,"\\'").replace(/\n/g,"\\n")}')">编辑</span>
+                <span style="margin:0 6px;color:var(--border)">|</span>
+                <span class="op-link" style="color:var(--danger)" onclick="deleteJob(${j.id},'${j.name.replace(/'/g,"\\'")}')">删除</span>
+            </td>
+        </tr>`).join('') + '</tbody></table>';
+}
+
+// ── 岗位 CRUD ──
+function showModal() {
+    document.getElementById('modal').style.display = 'flex';
+    document.getElementById('modal-title').textContent = '新建岗位';
+    document.getElementById('edit-id').value = '';
+    document.getElementById('job-name').value = '';
+    document.getElementById('job-keyword').value = '';
+    document.getElementById('job-description').value = '';
+}
+function hideModal() { document.getElementById('modal').style.display = 'none'; }
+
+function editJob(id, name, keyword, desc) {
+    document.getElementById('modal').style.display = 'flex';
+    document.getElementById('modal-title').textContent = '编辑岗位';
+    document.getElementById('edit-id').value = id;
+    document.getElementById('job-name').value = name;
+    document.getElementById('job-keyword').value = keyword;
+    document.getElementById('job-description').value = desc.replace(/\\n/g, '\n');
+}
+
+async function deleteJob(id, name) {
+    if (!confirm(`确定删除岗位「${name}」？`)) return;
+    const resp = await api('/api/jobs/' + id, {method:'DELETE'});
+    if (resp.success) { toast('已删除', 'success'); loadJobs(); }
+    else { toast('删除失败', 'error'); }
+}
+
+document.getElementById('job-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = document.getElementById('edit-id').value;
+    const data = {
+        name: document.getElementById('job-name').value.trim(),
+        keyword: document.getElementById('job-keyword').value.trim(),
+        job_description: document.getElementById('job-description').value.trim(),
+    };
+    if (!data.name) { toast('岗位名称不能为空', 'error'); return; }
+    let resp;
+    if (id) resp = await api('/api/jobs/' + id, {method:'PUT', body: JSON.stringify(data)});
+    else resp = await api('/api/jobs', {method:'POST', body: JSON.stringify(data)});
+    if (resp.success) { toast(id ? '已更新' : '已创建', 'success'); hideModal(); loadJobs(); }
+    else { toast(resp.error || '操作失败', 'error'); }
+});
+
+loadJobs();
+
+// ══════════════════════════════════════════
+// 管道视图
+// ══════════════════════════════════════════
+
+const STAGE_CONFIG = {
+    recommended: { label: '🟢 AI推荐', color: '#e6f9ee', icon: '🤖' },
+    contacted:   { label: '📞 已联系', color: '#e8f4fd', icon: '📞' },
+    submitted:   { label: '📤 已推荐甲方', color: '#fff7e6', icon: '📤' },
+    interview:   { label: '🎤 面试中', color: '#f0e6ff', icon: '🎤' },
+    offer:       { label: '📋 Offer', color: '#e6ffe6', icon: '📋' },
+    hired:       { label: '✅ 已录用', color: '#d4edda', icon: '✅' },
+    rejected:    { label: '❌ 已淘汰', color: '#fff0f0', icon: '❌' },
+};
+
+const REJECT_LABELS = {
+    phone_screen: '电话筛选',
+    client_reject: '甲方淘汰',
+    interview_reject: '面试淘汰',
+    offer_declined: '拒Offer',
+};
+
+let pipelineJobId = null;
+let pipelineData = null;
+
+async function viewPipeline(jobId, jobName) {
+    pipelineJobId = jobId;
+    document.getElementById('pipeline-modal').style.display = 'flex';
+    document.getElementById('pipeline-modal-title').textContent = jobName + ' - 候选人管道';
+    document.getElementById('pipeline-content').innerHTML = '<div class="empty"><p>加载中...</p></div>';
+
+    const resp = await api('/api/pipeline/' + jobId);
+    if (!resp.success) {
+        document.getElementById('pipeline-content').innerHTML = '<div class="empty"><p>加载失败：' + (resp.error||'未知错误') + '</p></div>';
+        return;
+    }
+    pipelineData = resp;
+    renderPipeline(resp);
+}
+
+function renderPipeline(data) {
+    const el = document.getElementById('pipeline-content');
+    const summary = data.summary || {};
+    const stages = data.stages || {};
+
+    // 管道概览条
+    let html = '<div class="pipeline-bar">';
+    for (const [key, cfg] of Object.entries(STAGE_CONFIG)) {
+        const count = summary[key] || 0;
+        html += `<div class="pipeline-bar-item" style="background:${cfg.color}" onclick="scrollToStage('${key}')">
+            <div class="pipeline-bar-count">${count}</div>
+            <div class="pipeline-bar-label">${cfg.label}</div>
+        </div>`;
+    }
+    html += '</div>';
+
+    // 各阶段详情
+    for (const [key, cfg] of Object.entries(STAGE_CONFIG)) {
+        const candidates = stages[key] || [];
+        if (candidates.length === 0) continue;
+
+        html += `<div class="pipeline-section" id="stage-${key}">
+            <div class="pipeline-section-header">${cfg.label} (${candidates.length}人)</div>`;
+
+        for (const c of candidates) {
+            const name = c.name || c.candidate_name || '未知';
+            const score = c.ai_score || '-';
+            const reason = c.reason || '';
+            const rejectStage = c.reject_stage || '';
+            const company = c.company || c.company_rejected || '';
+            const updated = c.updated || c.updated_at || '';
+
+            let meta = `AI评分: ${score}分`;
+            if (key === 'rejected' && rejectStage) {
+                meta += ` | ${REJECT_LABELS[rejectStage] || rejectStage}`;
+                if (company) meta += ` | 甲方: ${company}`;
+            }
+            if (reason && reason !== 'AI评分推荐') meta += ` | ${reason}`;
+            if (updated) meta += ` | ${updated.substring(0, 10)}`;
+
+            // 可操作的下一阶段按钮
+            let actions = '';
+            if (key !== 'hired' && key !== 'rejected') {
+                const nextStages = getNextStages(key);
+                actions = nextStages.map(s =>
+                    `<button class="btn btn-sm btn-default" onclick="openStatusUpdate('${esc(name)}',${score},'${s}')">${STAGE_CONFIG[s].icon}</button>`
+                ).join('');
+            }
+            // 总是可以更新状态
+            actions += ` <button class="btn btn-sm btn-default" onclick="openStatusUpdate('${esc(name)}',${score},'')">✏️</button>`;
+
+            html += `<div class="pipeline-card">
+                <div class="pipeline-card-info">
+                    <div class="pipeline-card-name">${name}</div>
+                    <div class="pipeline-card-meta">${meta}</div>
+                </div>
+                <div class="pipeline-card-actions">${actions}</div>
+            </div>`;
+        }
+        html += '</div>';
+    }
+
+    // 空状态
+    const total = summary.total || 0;
+    if (total === 0) {
+        html += '<div class="empty"><p>暂无候选人，去<a href="/scrape" class="op-link">简历抓取</a></p></div>';
+    }
+
+    el.innerHTML = html;
+}
+
+function getNextStages(current) {
+    const flow = {
+        recommended: ['contacted', 'rejected'],
+        contacted: ['submitted', 'rejected'],
+        submitted: ['interview', 'rejected'],
+        interview: ['offer', 'rejected'],
+        offer: ['hired', 'rejected'],
+    };
+    return flow[current] || [];
+}
+
+function scrollToStage(stage) {
+    const el = document.getElementById('stage-' + stage);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function hidePipelineModal() {
+    document.getElementById('pipeline-modal').style.display = 'none';
+}
+
+function esc(s) {
+    return (s||'').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+// ══════════════════════════════════════════
+// 状态更新
+// ══════════════════════════════════════════
+
+let statusTarget = {};
+
+function openStatusUpdate(name, score, suggestedStage) {
+    statusTarget = { name, score };
+    document.getElementById('st-candidate').textContent = name;
+    document.getElementById('st-score').textContent = score ? score + '分' : '-';
+    document.getElementById('st-stage').value = suggestedStage || '';
+    document.getElementById('st-reason').value = '';
+    document.getElementById('st-company').value = '';
+    document.getElementById('st-reject-stage').value = 'phone_screen';
+    onStageChange();
+    document.getElementById('status-modal').style.display = 'flex';
+}
+
+function closeStatusModal() {
+    document.getElementById('status-modal').style.display = 'none';
+}
+
+function onStageChange() {
+    const stage = document.getElementById('st-stage').value;
+    document.getElementById('reject-fields').style.display = stage === 'rejected' ? 'block' : 'none';
+}
+
+async function submitStatus() {
+    const stage = document.getElementById('st-stage').value;
+    if (!stage) { toast('请选择状态', 'error'); return; }
+
+    const reason = document.getElementById('st-reason').value.trim();
+    if (stage === 'rejected' && !reason) { toast('淘汰原因不能为空', 'error'); return; }
+
+    const body = {
+        job_id: pipelineJobId,
+        candidate_name: statusTarget.name,
+        stage: stage,
+        reason: reason || '状态更新',
+    };
+
+    if (stage === 'rejected') {
+        body.reject_stage = document.getElementById('st-reject-stage').value;
+        body.company_rejected = document.getElementById('st-company').value.trim();
+    }
+
+    const resp = await api('/api/pipeline/update', {
+        method: 'POST',
+        body: JSON.stringify(body),
+    });
+
+    if (resp.success) {
+        toast('状态已更新并同步到 Obsidian', 'success');
+        closeStatusModal();
+        // 刷新管道视图
+        if (pipelineJobId) viewPipeline(pipelineJobId, document.getElementById('pipeline-modal-title').textContent.replace(' - 候选人管道', ''));
+    } else {
+        toast(resp.error || '更新失败', 'error');
+    }
+}
+
+// ══════════════════════════════════════════
+// 简历列表（原有功能）
+// ══════════════════════════════════════════
+
+let currentJobId = null;
+let currentResumes = [];
+
+async function viewResumes(jobId, jobName) {
+    currentJobId = jobId;
+    document.getElementById('resume-modal').style.display = 'flex';
+    document.getElementById('resume-modal-title').textContent = jobName + ' - 简历列表';
+    document.getElementById('resume-list').innerHTML = '<div class="empty"><p>加载中...</p></div>';
+
+    const resp = await api('/api/jobs/' + jobId + '/resumes');
+    if (!resp.success || !resp.data || resp.data.length === 0) {
+        document.getElementById('resume-list').innerHTML = '<div class="empty"><p>该岗位下还没有简历，去<a href="/scrape" class="op-link">简历抓取</a></p></div>';
+        return;
+    }
+    currentResumes = resp.data;
+    renderResumeTable(currentResumes);
+}
+
+function renderResumeTable(resumes) {
+    const el = document.getElementById('resume-list');
+    resumes.sort((a, b) => {
+        const sa = (a.score100 || {}).total_score || 0;
+        const sb = (b.score100 || {}).total_score || 0;
+        return sb - sa;
+    });
+    const makeKey = (r) => r.detail_url || ((r.name||'') + (r.title||''));
+
+    el.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
+        '<span style="color:var(--text-3)">共 ' + resumes.length + ' 份简历（按分数降序）</span>' +
+        '</div>' +
+        '<table><thead><tr>' +
+        '<th>#</th><th>姓名</th><th>年龄</th><th>年限</th><th>学历</th><th>城市</th>' +
+        '<th>总分</th><th>状态</th><th>推荐</th><th>硬需求</th><th>操作</th>' +
+        '</tr></thead><tbody>' +
+        resumes.map((r, i) => {
+            const name = r.name || r.title || '-';
+            const age = r.age || '-';
+            const exp = r.experience || '-';
+            const edu = r.education || '-';
+            const city = r.location || '-';
+            const detailUrl = r.detail_url || '';
+            const rkey = makeKey(r);
+
+            let scoreCell = '<span style="color:var(--text-4)">-</span>';
+            let statusCell = '-';
+            let recCell = '-';
+            let reqCell = '-';
+            if (r.score100) {
+                const s = r.score100;
+                const total = s.total_score || 0;
+                const cls = total >= 80 ? 'score-high' : total >= 60 ? 'score-mid' : 'score-low';
+                scoreCell = `<span class="score-pill ${cls}">${total}分</span>`;
+                statusCell = s.pass ? '<span class="tag tag-pass">通过</span>' : '<span class="tag tag-fail">不通过</span>';
+                recCell = `<span style="font-size:12px">${s.recommendation || '-'}</span>`;
+                const hardReqs = s.hard_requirements_met || [];
+                if (hardReqs.length > 0) {
+                    reqCell = hardReqs.map(req => {
+                        const label = req.requirement || '';
+                        const short = label.length > 10 ? label.substring(0, 10) + '…' : label;
+                        return req.met
+                            ? `<span class="tag-req-pass" title="${label}">✓ ${short}</span>`
+                            : `<span class="tag-req-fail" title="${req.detail||label}">✗ ${short}</span>`;
+                    }).join('');
+                }
+            } else if (r.score_error) {
+                statusCell = `<span class="tag tag-fail" title="${r.score_error}">评分失败</span>`;
+            }
+
+            const safeKey = rkey.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+            const safeName = name.replace(/'/g, "\\'");
+            const score100 = (r.score100 || {}).total_score || 0;
+            const actions =
+                `<a href="javascript:void(0)" class="op-link" onclick="editResumeName('${safeKey}')" title="编辑姓名">✏️</a> ` +
+                `<a href="javascript:void(0)" class="op-link" onclick="openStatusUpdate('${safeName}',${score100},'')" title="更新状态">📋</a> ` +
+                `<a href="javascript:void(0)" class="op-link" style="color:var(--danger)" onclick="deleteResume('${safeKey}','${safeName}')" title="删除">🗑️</a> ` +
+                (detailUrl ? `<a href="${detailUrl}" target="_blank" class="op-link" title="猎聘详情">🔗</a>` : '');
+
+            return '<tr>' +
+                `<td style="color:var(--text-4)">${i+1}</td>` +
+                `<td style="font-weight:500">${name}</td>` +
+                `<td>${age}</td><td>${exp}</td><td>${edu}</td><td>${city}</td>` +
+                `<td>${scoreCell}</td><td>${statusCell}</td><td>${recCell}</td>` +
+                `<td style="font-size:11px;max-width:220px">${reqCell}</td>` +
+                `<td style="white-space:nowrap">${actions}</td>` +
+                '</tr>';
+        }).join('') + '</tbody></table>';
+}
+
+async function editResumeName(resumeKey) {
+    const r = currentResumes.find(r => (r.detail_url || ((r.name||'')+(r.title||''))) === resumeKey);
+    if (!r) return;
+    const oldName = r.name || r.title || '';
+    const newName = prompt('编辑姓名：', oldName);
+    if (newName === null || newName.trim() === '' || newName.trim() === oldName) return;
+    const resp = await api('/api/resumes/edit', {
+        method: 'POST',
+        body: JSON.stringify({ job_id: currentJobId, resume_key: resumeKey, updates: { name: newName.trim() } })
+    });
+    if (resp.success) { toast('姓名已更新', 'success'); r.name = newName.trim(); renderResumeTable(currentResumes); }
+    else { toast(resp.error || '更新失败', 'error'); }
+}
+
+async function deleteResume(resumeKey, name) {
+    if (!confirm(`确定删除「${name}」的简历？`)) return;
+    const resp = await api('/api/resumes/delete', {
+        method: 'POST',
+        body: JSON.stringify({ job_id: currentJobId, resume_key: resumeKey })
+    });
+    if (resp.success) { toast('已删除', 'success'); currentResumes = currentResumes.filter(r => (r.detail_url || ((r.name||'')+(r.title||''))) !== resumeKey); renderResumeTable(currentResumes); }
+    else { toast(resp.error || '删除失败', 'error'); }
+}
+
+function hideResumeModal() { document.getElementById('resume-modal').style.display = 'none'; }
+</script>
+{% endblock %}
