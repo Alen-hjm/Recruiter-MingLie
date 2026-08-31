@@ -25,6 +25,8 @@ from .models import (
     create_interview_feedback, get_interview_feedbacks, mark_feedback_synced,
     create_candidate_from_score, update_candidate_pipeline,
     get_candidates_by_stage, get_pipeline_summary, get_unsynced_feedbacks,
+    create_search_strategy, get_search_strategies, get_search_strategy,
+    update_search_strategy, delete_search_strategy, get_default_strategy,
 )
 from .knowledge_engine import init_knowledge_db
 
@@ -179,10 +181,11 @@ def api_settings():
 @login_required
 def api_jobs_list():
     jobs = get_jobs(current_user.id)
-    # 附带每个岗位的简历数量
+    # 附带每个岗位的简历数量和搜索策略
     for j in jobs:
         resumes = get_resumes_by_job(current_user.id, j["id"])
         j["resume_count"] = len(resumes)
+        j["strategies"] = get_search_strategies(current_user.id, j["id"])
     return jsonify({"success": True, "data": jobs})
 
 
@@ -197,6 +200,15 @@ def api_jobs_create():
         return jsonify({"success": False, "error": "岗位名称不能为空"}), 400
     job_id = create_job(current_user.id, name, keyword, desc)
 
+    # P0-1: 自动创建默认搜索策略（岗位名和搜索词解耦）
+    if keyword:
+        create_search_strategy(
+            current_user.id, job_id, keyword,
+            name=f"{name}-默认搜索",
+            city=data.get("city", "上海").strip() or "上海",
+            is_default=True,
+        )
+
     # 知识引擎：从新岗位中学习
     try:
         from .knowledge_engine import learn_from_job, search_and_learn_industry
@@ -205,7 +217,19 @@ def api_jobs_create():
     except Exception as e:
         print(f"[知识引擎] 岗位学习失败: {e}")
 
+    # ⭐ 新增：同步到 Obsidian        
+    try:
+        settings = get_settings(current_user.id)
+        job_folder = settings.get("obsidian_job_path", "")
+        if job_folder:
+            from .knowledge import sync_job_to_obsidian
+            sync_job_to_obsidian(job_folder, {"name": name, "keyword": keyword, "job_description": desc})
+            print(f"[Obsidian] 已同步岗位: {name}")
+    except Exception as e:
+        print(f"[Obsidian] 同步失败: {e}")
+
     return jsonify({"success": True, "id": job_id})
+
 
 
 @app.route("/api/jobs/<int:job_id>", methods=["PUT"])
@@ -309,6 +333,75 @@ def api_resume_delete():
     return jsonify({"success": False, "error": "未找到该简历"}), 404
 
 
+# ── 搜索策略 API ──
+
+@app.route("/api/jobs/<int:job_id>/strategies")
+@login_required
+def api_strategies_list(job_id):
+    """获取岗位的所有搜索策略"""
+    job = get_job(job_id)
+    if not job or job["user_id"] != current_user.id:
+        return jsonify({"success": False, "error": "岗位不存在"}), 404
+    strategies = get_search_strategies(current_user.id, job_id)
+    return jsonify({"success": True, "data": strategies})
+
+
+@app.route("/api/jobs/<int:job_id>/strategies", methods=["POST"])
+@login_required
+def api_strategies_create(job_id):
+    """为岗位创建搜索策略"""
+    job = get_job(job_id)
+    if not job or job["user_id"] != current_user.id:
+        return jsonify({"success": False, "error": "岗位不存在"}), 404
+
+    data = request.json or {}
+    keyword = data.get("keyword", "").strip()
+    if not keyword:
+        return jsonify({"success": False, "error": "关键词不能为空"}), 400
+
+    name = data.get("name", "").strip() or keyword
+    city = data.get("city", "").strip() or "上海"
+    platform = data.get("platform", "liepin")
+    max_pages = min(int(data.get("max_pages", 3)), 5)
+    is_default = data.get("is_default", False)
+
+    sid = create_search_strategy(
+        current_user.id, job_id, keyword,
+        name=name, city=city, platform=platform,
+        max_pages=max_pages, is_default=is_default,
+    )
+    return jsonify({"success": True, "id": sid})
+
+
+@app.route("/api/strategies/<int:strategy_id>", methods=["PUT"])
+@login_required
+def api_strategies_update(strategy_id):
+    """更新搜索策略"""
+    s = get_search_strategy(strategy_id)
+    if not s or s["user_id"] != current_user.id:
+        return jsonify({"success": False, "error": "策略不存在"}), 404
+
+    data = request.json or {}
+    allowed = ["name", "keyword", "city", "platform", "max_pages", "is_default"]
+    updates = {k: v for k, v in data.items() if k in allowed and v is not None}
+    if "is_default" in updates:
+        updates["is_default"] = 1 if updates["is_default"] else 0
+    if updates:
+        update_search_strategy(strategy_id, **updates)
+    return jsonify({"success": True})
+
+
+@app.route("/api/strategies/<int:strategy_id>", methods=["DELETE"])
+@login_required
+def api_strategies_delete(strategy_id):
+    """删除搜索策略"""
+    s = get_search_strategy(strategy_id)
+    if not s or s["user_id"] != current_user.id:
+        return jsonify({"success": False, "error": "策略不存在"}), 404
+    delete_search_strategy(strategy_id)
+    return jsonify({"success": True})
+
+
 # ── 抓取 API ──
 
 # 全局任务状态
@@ -406,24 +499,35 @@ def _run_scrape_thread(task_id: int, config: dict, keyword: str, city: str, plat
 def api_scrape_start():
     data = request.json or {}
     job_id = data.get("job_id")
-    platform = data.get("platform", "liepin")
-    max_pages = min(int(data.get("max_pages", 3)), 5)
+    strategy_id = data.get("strategy_id")
 
     if not job_id:
         return jsonify({"success": False, "error": "请选择归属岗位"}), 400
 
-    # 从岗位获取关键词和城市
+    # 从岗位获取信息
     job = get_job(int(job_id))
     if not job or job["user_id"] != current_user.id:
         return jsonify({"success": False, "error": "岗位不存在"}), 404
 
-    # 改后：优先用前端传入的，fallback 到岗位配置
-    keyword = data.get("keyword", "").strip() or job.get("keyword", "").strip()
+    # 优先用搜索策略，其次用前端传入，最后 fallback 到岗位配置
+    if strategy_id:
+        strategy = get_search_strategy(int(strategy_id))
+        if strategy and strategy["user_id"] == current_user.id:
+            keyword = strategy["keyword"]
+            city = strategy.get("city", "上海")
+            platform = strategy.get("platform", "liepin")
+            max_pages = min(int(strategy.get("max_pages", 3)), 5)
+        else:
+            return jsonify({"success": False, "error": "搜索策略不存在"}), 404
+    else:
+        platform = data.get("platform", "liepin")
+        max_pages = min(int(data.get("max_pages", 3)), 5)
+        keyword = data.get("keyword", "").strip() or job.get("keyword", "").strip()
+        city = data.get("city", "").strip() or "上海"
+
     search_mode = data.get("search_mode", "auto")
     if not keyword and search_mode != "manual":
-        return jsonify({"error": "...或切换为手动搜索模式"}), 400
-
-    city = data.get("city", "").strip() or "上海"
+        return jsonify({"error": "请填写关键词或切换为手动搜索模式"}), 400
 
     # 获取用户 LLM 配置
     settings = get_settings(current_user.id)
@@ -1356,12 +1460,95 @@ def _get_user_from_api_key(request):
 
 @app.route("/api/extension/jobs")
 def api_extension_jobs():
-    """插件获取岗位列表（用 API Key 认证）"""
+    """插件获取岗位列表（含搜索策略）（用 API Key 认证）"""
     user = _get_user_from_api_key(request)
     if not user:
         return jsonify({"success": False, "error": "无效的 API Key"}), 401
     jobs = get_jobs(user.id)
-    return jsonify({"success": True, "data": [{"id": j["id"], "name": j["name"]} for j in jobs]})
+    result = []
+    for j in jobs:
+        strategies = get_search_strategies(user.id, j["id"])
+        result.append({
+            "id": j["id"],
+            "name": j["name"],
+            "keyword": j.get("keyword", ""),
+            "strategies": strategies,
+        })
+    return jsonify({"success": True, "data": result})
+
+
+@app.route("/api/extension/jobs", methods=["POST"])
+def api_extension_jobs_create():
+    """插件创建岗位（用 API Key 认证）
+    
+    接收 {name, keyword?, job_description?}，创建岗位并返回 id。
+    exe/插件新增项目时调用此接口，实现与 web 端同步。
+    """
+    user = _get_user_from_api_key(request)
+    if not user:
+        return jsonify({"success": False, "error": "无效的 API Key"}), 401
+
+    data = request.json or {}
+    name = data.get("name", "").strip()
+    keyword = data.get("keyword", "").strip()
+    desc = data.get("job_description", "").strip()
+
+    if not name:
+        return jsonify({"success": False, "error": "岗位名称不能为空"}), 400
+
+    job_id = create_job(user.id, name, keyword, desc)
+
+    # P0-1: 自动创建默认搜索策略
+    if keyword:
+        create_search_strategy(
+            user.id, job_id, keyword,
+            name=f"{name}-默认搜索",
+            city=data.get("city", "上海").strip() or "上海",
+            is_default=True,
+        )
+
+    # 知识引擎学习
+    try:
+        from .knowledge_engine import learn_from_job, search_and_learn_industry
+        learn_from_job({"name": name, "keyword": keyword, "job_description": desc})
+        search_and_learn_industry(name, user_id=user.id)
+    except Exception as e:
+        print(f"[知识引擎] 岗位学习失败: {e}")
+
+    return jsonify({"success": True, "id": job_id})
+
+
+@app.route("/api/extension/strategies/<int:job_id>")
+def api_extension_strategies(job_id):
+    """插件获取岗位的搜索策略列表（用 API Key 认证）"""
+    user = _get_user_from_api_key(request)
+    if not user:
+        return jsonify({"success": False, "error": "无效的 API Key"}), 401
+    strategies = get_search_strategies(user.id, job_id)
+    return jsonify({"success": True, "data": strategies})
+
+
+@app.route("/api/extension/strategies/<int:job_id>", methods=["POST"])
+def api_extension_strategies_create(job_id):
+    """插件为岗位创建搜索策略（用 API Key 认证）"""
+    user = _get_user_from_api_key(request)
+    if not user:
+        return jsonify({"success": False, "error": "无效的 API Key"}), 401
+
+    data = request.json or {}
+    keyword = data.get("keyword", "").strip()
+    if not keyword:
+        return jsonify({"success": False, "error": "关键词不能为空"}), 400
+
+    sid = create_search_strategy(
+        user.id, job_id, keyword,
+        name=data.get("name", "").strip() or keyword,
+        city=data.get("city", "上海"),
+        platform=data.get("platform", "liepin"),
+        max_pages=min(int(data.get("max_pages", 3)), 5),
+        is_default=data.get("is_default", False),
+    )
+    return jsonify({"success": True, "id": sid})
 
 
 @app.route("/api/extension/score", methods=["POST"])
@@ -1824,6 +2011,9 @@ def api_knowledge_refresh():
     return jsonify({"success": True, "message": f"已为 {len(jobs)} 个岗位触发知识刷新"})
 
 
+# 注：知识库的插件版接口在 /api/extension/knowledge/* 路径下（见上方 extension 区域）
+
+
 @app.route("/api/knowledge/query")
 @login_required
 def api_knowledge_query():
@@ -1899,3 +2089,143 @@ def api_extension_chat_clear():
     session_key = f"ext_{user.id}"
     _extension_sessions.pop(session_key, None)
     return jsonify({"success": True})
+
+
+@app.route("/api/extension/pipeline/<int:job_id>")
+def api_extension_pipeline(job_id):
+    """插件获取候选人管道状态（用 API Key 认证）"""
+    user = _get_user_from_api_key(request)
+    if not user:
+        return jsonify({"success": False, "error": "无效的 API Key"}), 401
+
+    job = get_job(job_id)
+    if not job or job["user_id"] != user.id:
+        return jsonify({"success": False, "error": "岗位不存在"}), 404
+
+    stages = get_candidates_by_stage(user.id, job_id)
+    summary = get_pipeline_summary(user.id, job_id)
+    return jsonify({"success": True, "summary": summary, "stages": stages})
+
+
+@app.route("/api/extension/pipeline/<int:job_id>/add", methods=["POST"])
+def api_extension_pipeline_add(job_id):
+    """插件将候选人加入管道（用 API Key 认证）"""
+    user = _get_user_from_api_key(request)
+    if not user:
+        return jsonify({"success": False, "error": "无效的 API Key"}), 401
+
+    job = get_job(job_id)
+    if not job or job["user_id"] != user.id:
+        return jsonify({"success": False, "error": "岗位不存在"}), 404
+
+    data = request.json or {}
+    candidate_name = data.get("name", "未知")
+    detail_url = data.get("detail_url", "")
+    ai_score = data.get("score", 0)
+
+    resume_key = detail_url or candidate_name
+
+    conn = get_db()
+    try:
+        # 检查是否已存在
+        existing = conn.execute(
+            "SELECT id FROM interview_feedback WHERE user_id = ? AND job_id = ? AND resume_key = ?",
+            (user.id, job_id, resume_key),
+        ).fetchone()
+        if existing:
+            return jsonify({"success": True, "message": "该候选人已在管道中", "id": existing["id"]})
+
+        cursor = conn.execute(
+            """INSERT INTO interview_feedback
+               (user_id, job_id, candidate_name, resume_key, ai_score, feedback_type, reason, pipeline_stage)
+               VALUES (?, ?, ?, ?, ?, 'recommend', '插件手动加入', 'recommended')""",
+            (user.id, job_id, candidate_name, resume_key, ai_score),
+        )
+        conn.commit()
+        return jsonify({"success": True, "id": cursor.lastrowid, "message": f"已将 {candidate_name} 加入管道"})
+    finally:
+        conn.close()
+
+
+@app.route("/api/extension/pipeline/<int:job_id>/delete", methods=["POST"])
+def api_extension_pipeline_delete(job_id):
+    """插件删除管道候选人（用 API Key 认证）"""
+    user = _get_user_from_api_key(request)
+    if not user:
+        return jsonify({"success": False, "error": "无效的 API Key"}), 401
+
+    data = request.json or {}
+    feedback_id = data.get("id")
+    if not feedback_id:
+        return jsonify({"success": False, "error": "缺少候选人 ID"}), 400
+
+    conn = get_db()
+    try:
+        conn.execute(
+            "DELETE FROM interview_feedback WHERE id = ? AND user_id = ? AND job_id = ?",
+            (feedback_id, user.id, job_id),
+        )
+        conn.commit()
+        return jsonify({"success": True, "message": "已删除"})
+    finally:
+        conn.close()
+
+
+@app.route("/api/extension/knowledge/stats")
+def api_extension_knowledge_stats():
+    """插件获取知识库统计（用 API Key 认证）"""
+    user = _get_user_from_api_key(request)
+    if not user:
+        return jsonify({"success": False, "error": "无效的 API Key"}), 401
+    from .knowledge_engine import get_knowledge_stats
+    stats = get_knowledge_stats()
+    return jsonify({"success": True, "data": stats})
+
+
+@app.route("/api/extension/knowledge/refresh", methods=["POST"])
+def api_extension_knowledge_refresh():
+    """插件刷新知识库（用 API Key 认证）"""
+    user = _get_user_from_api_key(request)
+    if not user:
+        return jsonify({"success": False, "error": "无效的 API Key"}), 401
+    from .knowledge_engine import search_and_learn_industry, cleanup_expired_knowledge
+    jobs = get_jobs(user.id)
+    for job in jobs:
+        search_and_learn_industry(job["name"], user_id=user.id)
+    cleanup_expired_knowledge()
+    return jsonify({"success": True, "message": f"已为 {len(jobs)} 个岗位触发知识刷新"})
+
+
+@app.route("/api/extension/knowledge/list")
+def api_extension_knowledge_list():
+    """插件查询知识库条目（用 API Key 认证）"""
+    user = _get_user_from_api_key(request)
+    if not user:
+        return jsonify({"success": False, "error": "无效的 API Key"}), 401
+    from .knowledge_engine import query_knowledge
+    ktype = request.args.get("type")
+    keyword = request.args.get("keyword")
+    limit = int(request.args.get("limit", 50))
+    results = query_knowledge(knowledge_type=ktype, keyword=keyword, limit=limit)
+    return jsonify({"success": True, "data": results})
+
+
+@app.route("/api/extension/knowledge/delete", methods=["POST"])
+def api_extension_knowledge_delete():
+    """插件删除知识条目（用 API Key 认证）"""
+    user = _get_user_from_api_key(request)
+    if not user:
+        return jsonify({"success": False, "error": "无效的 API Key"}), 401
+
+    data = request.json or {}
+    knowledge_id = data.get("id")
+    if not knowledge_id:
+        return jsonify({"success": False, "error": "缺少知识 ID"}), 400
+
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM knowledge WHERE id = ?", (knowledge_id,))
+        conn.commit()
+        return jsonify({"success": True, "message": "已删除"})
+    finally:
+        conn.close()

@@ -1,68 +1,200 @@
 /**
  * 明猎 - Side Panel 逻辑
  * 主页：AI 对话（调用知识库 + 岗位 + 候选人）
+ *
+ * 重构要点：
+ *  - 头部全局岗位下拉 selJobGlobal 驱动所有面板（替代原先 3 个独立下拉）
+ *  - 入口页统计卡片（推荐/面试/淘汰 + 进行中）
+ *  - 底部「一键抓取」chip 直接发起抓取并跳到候选人页
+ *  - 页面间带上下文跳转（候选人/管道 → AI 助手）
  */
 
 let API_BASE = "http://127.0.0.1:5000";
 let API_KEY = "";
-let state = { running: false, jobId: null, allResumes: [], stats: {}, currentPage: 0 };
+let state = { running: false, jobId: null, jobName: "", allResumes: [], stats: {}, currentPage: 0, aiContext: null, pendingCandidate: null };
 
 // ══════════════════════════════════════════
 // 初始化
 // ══════════════════════════════════════════
 
-document.addEventListener("DOMContentLoaded", async () => {
-  const stored = await chrome.storage.local.get(["apiKey", "serverUrl"]);
-  if (stored.apiKey) { API_KEY = stored.apiKey; document.getElementById("inputApiKey").value = stored.apiKey; }
-  if (stored.serverUrl) { API_BASE = stored.serverUrl; document.getElementById("inputServer").value = stored.serverUrl; }
+document.addEventListener("DOMContentLoaded", () => {
+  // ══════════════════════════════════════════
+  // 第一步：同步绑定所有事件（不依赖网络）
+  // 每个都加 if 保护，互不影响
+  // ══════════════════════════════════════════
 
-  await checkServer();
-  await loadJobs();
-  checkPage();
-
-  // 标签切换
+  // ✅ 标签切换
   document.querySelectorAll(".tab").forEach(tab => {
-    tab.addEventListener("click", () => {
-      document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
-      document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
-      tab.classList.add("active");
-      document.getElementById("panel-" + tab.dataset.panel).classList.add("active");
+    tab.addEventListener("click", () => switchToPanel(tab.dataset.panel));
+  });
+
+  // ✅ AI 对话
+  const btnSend = document.getElementById("btnSend");
+  if (btnSend) btnSend.addEventListener("click", sendChat);
+
+  const chatInput = document.getElementById("chatInput");
+  if (chatInput) {
+    chatInput.addEventListener("keydown", e => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendChat();
+      }
     });
-  });
+    chatInput.addEventListener("input", autoResize);
+  }
 
-  // AI 对话
-  document.getElementById("btnSend").addEventListener("click", sendChat);
-  document.getElementById("chatInput").addEventListener("keydown", e => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
-  });
-  document.getElementById("chatInput").addEventListener("input", autoResize);
-
-  // 快捷按钮
-  document.querySelectorAll(".quick-btn, .welcome-card").forEach(el => {
+  // ✅ 快捷卡片
+  document.querySelectorAll(".quick-card[data-msg], .chip[data-msg]").forEach(el => {
     el.addEventListener("click", () => {
       const msg = el.dataset.msg;
-      if (msg) { document.getElementById("chatInput").value = msg; sendChat(); }
+      if (msg) {
+        const input = document.getElementById("chatInput");
+        if (input) input.value = msg;
+        sendChat();
+      }
     });
   });
 
-  // 清空对话
-  document.getElementById("btnClearChat").addEventListener("click", clearChat);
-  document.getElementById("btnRefresh").addEventListener("click", () => { checkServer().then(() => loadJobs()); checkPage(); });
+  // ✅ 一键抓取
+  const quickScrape = document.getElementById("quickScrape");
+  if (quickScrape) quickScrape.addEventListener("click", onQuickScrape);
 
-  // 抓取
-  document.getElementById("btnScrape").addEventListener("click", toggleScrape);
+  // ✅ 清空对话
+  const btnClearChat = document.getElementById("btnClearChat");
+  if (btnClearChat) btnClearChat.addEventListener("click", clearChat);
 
-  // 设置
-  document.getElementById("btnSaveSettings").addEventListener("click", saveSettings);
-  document.getElementById("btnRefreshKnowledge").addEventListener("click", refreshKnowledge);
+  // ✅ 刷新
+  const btnRefresh = document.getElementById("btnRefresh");
+  if (btnRefresh) {
+    btnRefresh.addEventListener("click", () => {
+      checkServer().then(() => loadJobs());
+      checkPage();
+    });
+  }
 
-  // 岗位选择
-  document.getElementById("selJob").addEventListener("change", e => { state.jobId = parseInt(e.target.value) || null; });
-  document.getElementById("selJobResume").addEventListener("change", e => loadResumes(e.target.value));
-  document.getElementById("selJobPipe").addEventListener("change", e => loadPipeline(e.target.value));
+  // ✅ 提交评分
+  const btnSubmit = document.getElementById("btnSubmit");
+  if (btnSubmit) {
+    btnSubmit.addEventListener("click", submitResumes);
+  }
 
-  loadKnowledgeStats();
+  // ✅ 清空收集
+  const btnClearCollect = document.getElementById("btnClearCollect");
+  if (btnClearCollect) btnClearCollect.addEventListener("click", clearCollected);
+
+  // ✅ 设置
+  const btnSaveSettings = document.getElementById("btnSaveSettings");
+  if (btnSaveSettings) btnSaveSettings.addEventListener("click", saveSettings);
+
+  const btnRefreshKnowledge = document.getElementById("btnRefreshKnowledge");
+  if (btnRefreshKnowledge) btnRefreshKnowledge.addEventListener("click", refreshKnowledge);
+
+  const btnViewKnowledge = document.getElementById("btnViewKnowledge");
+  if (btnViewKnowledge) btnViewKnowledge.addEventListener("click", viewKnowledge);
+
+  // ✅ 全局岗位下拉
+  const selJobGlobal = document.getElementById("selJobGlobal");
+  if (selJobGlobal) {
+    selJobGlobal.addEventListener("change", e => {
+      const sel = e.target;
+      state.jobId = parseInt(sel.value) || null;
+      state.jobName = sel.options[sel.selectedIndex]?.text || "";
+      state.pendingCandidate = null;
+      const active = document.querySelector(".panel.active");
+      if (active && active.id === "panel-resumes") loadResumes(state.jobId);
+      if (active && active.id === "panel-pipeline") loadPipeline(state.jobId);
+    });
+  }
+
+  // ✅ 候选人排序 / 筛选
+  const selSort = document.getElementById("selSort");
+  if (selSort) selSort.addEventListener("change", () => renderResumes());
+  const selFilter = document.getElementById("selFilter");
+  if (selFilter) selFilter.addEventListener("change", () => renderResumes());
+
+  // ✅ 管道阶段筛选
+  const pipelineBar = document.getElementById("pipelineBar");
+  if (pipelineBar) {
+    pipelineBar.addEventListener("click", e => {
+      const chip = e.target.closest(".pipeline-chip");
+      if (!chip) return;
+      document.querySelectorAll(".pipeline-chip").forEach(c => c.classList.remove("active"));
+      chip.classList.add("active");
+      state.pipelineFilter = chip.dataset.stage;
+      renderPipeline();
+    });
+  }
+
+  // ══════════════════════════════════════════
+  // 第二步：异步加载数据（失败不影响按钮）
+  // ══════════════════════════════════════════
+  initAsync();
 });
+
+// 独立的数据初始化函数
+async function initAsync() {
+  try {
+    // 加载存储数据
+    const stored = await chrome.storage.local.get(["apiKey", "serverUrl", "collectedResumes", "collectedJobId"]);
+    if (stored.apiKey) {
+      API_KEY = stored.apiKey;
+      const inputApiKey = document.getElementById("inputApiKey");
+      if (inputApiKey) inputApiKey.value = stored.apiKey;
+    }
+    if (stored.serverUrl) API_BASE = stored.serverUrl;
+
+    // 检查服务器
+    const serverOk = await checkServer();
+    if (serverOk) {
+      await loadJobs();
+    } else {
+      log("无法连接服务器，请检查 API Key 和后端服务", "err");
+    }
+
+    // 恢复已收集的简历
+    if (stored.collectedResumes && stored.collectedResumes.length > 0) {
+      collectedResumes = stored.collectedResumes;
+      state.jobId = stored.collectedJobId;
+      const countEl = document.getElementById("collectedCount");
+      if (countEl) countEl.textContent = collectedResumes.length;
+      updateCollectUI();
+      log(`从缓存恢复 ${collectedResumes.length} 份简历`, "dim");
+    }
+
+    // 监听 storage 变化
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === "local" && changes.apiKey) {
+        const newKey = changes.apiKey.newValue || "";
+        if (newKey && newKey !== API_KEY) {
+          API_KEY = newKey;
+          const inputApiKey = document.getElementById("inputApiKey");
+          if (inputApiKey) inputApiKey.value = newKey;
+          checkServer().then(ok => { if (ok) { loadJobs(); } });
+        }
+      }
+    });
+  } catch (e) {
+    console.error("[明猎] 初始化失败:", e);
+    log("初始化部分功能失败，但核心按钮仍可使用", "dim");
+  }
+}
+
+// ══════════════════════════════════════════
+// 面板切换
+// ══════════════════════════════════════════
+
+function switchToPanel(name) {
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+  const tab = document.querySelector(`.tab[data-panel="${name}"]`);
+  if (tab) tab.classList.add("active");
+  const panel = document.getElementById("panel-" + name);
+  if (panel) panel.classList.add("active");
+
+  // 进入页面时按需加载
+  if (name === "resumes") loadResumes(state.jobId);
+  if (name === "pipeline") loadPipeline(state.jobId);
+}
 
 // ══════════════════════════════════════════
 // API
@@ -71,54 +203,107 @@ document.addEventListener("DOMContentLoaded", async () => {
 function apiFetch(url, options = {}) {
   const headers = { ...options.headers };
   if (API_KEY) headers["X-API-Key"] = API_KEY;
-  return fetch(url, { ...options, headers });
+  return fetch(url, { ...options, headers }).catch(e => {
+    throw new Error(`网络请求失败: ${e.message}`);
+  });
+}
+
+function ensureApiKey() {
+  if (API_KEY) return true;
+  const inputEl = document.getElementById("inputApiKey");
+  if (inputEl && inputEl.value.trim()) {
+    API_KEY = inputEl.value.trim();
+    return true;
+  }
+  return false;
 }
 
 async function checkServer() {
   const dot = document.getElementById("dotServer");
   const txt = document.getElementById("txtServer");
+  const headerStatus = document.getElementById("headerStatus");
+  const settingsStatus = document.getElementById("settingsStatus");
+
+  // 优先从输入框读取（用户可能还没点保存）
+  const inputEl = document.getElementById("inputApiKey");
+  if (inputEl) {
+    const inputKey = inputEl.value.trim();
+    if (inputKey && inputKey !== API_KEY) {
+      API_KEY = inputKey;
+    }
+  }
+
+  function setStatus(dotClass, msg, statusType) {
+    if (dot) { dot.className = "dot " + dotClass; }
+    if (txt) { txt.textContent = msg; }
+    if (headerStatus) {
+      headerStatus.textContent = msg;
+      headerStatus.style.color = statusType === "ok" ? "#52c41a" : statusType === "warn" ? "#faad14" : "#ff4d4f";
+    }
+    if (settingsStatus) {
+      settingsStatus.style.display = "block";
+      settingsStatus.style.background = statusType === "ok" ? "#e6f9ee" : statusType === "warn" ? "#fff8e6" : "#fff0f0";
+      settingsStatus.style.color = statusType === "ok" ? "#1a8a4a" : statusType === "warn" ? "#b26a00" : "#c0392b";
+      settingsStatus.textContent = msg;
+    }
+  }
+
   try {
+    if (!API_KEY) {
+      setStatus("dot-orange", "请先填写 API Key", "warn");
+      return false;
+    }
+    setStatus("dot-gray", "连接中...", "warn");
     const resp = await apiFetch(`${API_BASE}/api/extension/jobs`);
     const data = await resp.json();
-    if (data.success) { dot.className = "dot dot-green"; txt.textContent = "已连接"; return true; }
-    else { dot.className = "dot dot-orange"; txt.textContent = data.error || "Key 无效"; }
-  } catch (e) { dot.className = "dot dot-gray"; txt.textContent = "未连接"; }
+    if (data.success) {
+      setStatus("dot-green", "已连接 (" + (data.data?.length || 0) + " 个岗位)", "ok");
+      return true;
+    } else {
+      setStatus("dot-orange", data.error || "API Key 无效", "err");
+    }
+  } catch (e) {
+    setStatus("dot-gray", e.message || "未连接", "err");
+  }
   return false;
 }
 
 async function loadJobs() {
-  const selects = ["selJob", "selJobResume", "selJobPipe"].map(id => document.getElementById(id));
+  const sel = document.getElementById("selJobGlobal");
+  if (!ensureApiKey()) {
+    sel.innerHTML = '<option value="">请先填写 API Key</option>';
+    return;
+  }
   try {
     const resp = await apiFetch(`${API_BASE}/api/extension/jobs`);
     const data = await resp.json();
     if (data.success && data.data.length > 0) {
-      selects.forEach(sel => { sel.innerHTML = data.data.map(j => `<option value="${j.id}">${j.name}</option>`).join(""); });
-      state.jobId = data.data[0].id;
+      sel.innerHTML = data.data.map(j => `<option value="${j.id}">${j.name}</option>`).join("");
+      state.jobId = parseInt(sel.value) || data.data[0].id;
+      state.jobName = data.data.find(j => j.id === state.jobId)?.name || "";
     } else {
-      selects.forEach(sel => { sel.innerHTML = '<option value="">请先创建岗位</option>'; });
+      sel.innerHTML = '<option value="">请先在网页端创建岗位</option>';
+      state.jobId = null;
     }
   } catch (e) {
-    selects.forEach(sel => { sel.innerHTML = '<option value="">加载失败</option>'; });
+    sel.innerHTML = '<option value="">加载失败 - 请检查连接</option>';
   }
 }
 
 async function checkPage() {
-  const dot = document.getElementById("dotPage");
-  const txt = document.getElementById("txtPage");
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab) return;
-    const resp = await chrome.tabs.sendMessage(tab.id, { action: "get_page_info" });
-    if (resp && resp.isLiepin) {
-      dot.className = "dot dot-green";
-      txt.textContent = `${resp.cardCount} 个卡片`;
-      document.getElementById("statCards").textContent = resp.cardCount;
-    } else {
-      dot.className = "dot dot-orange";
-      txt.textContent = "请打开猎聘";
+    if (tab && tab.url && tab.url.includes("liepin.com")) {
+      console.log("[明猎] 猎聘页面就绪:", tab.url);
     }
-  } catch (e) { dot.className = "dot dot-gray"; txt.textContent = "请打开猎聘"; }
+  } catch (e) {}
 }
+
+// ══════════════════════════════════════════
+// 统计卡片
+// ══════════════════════════════════════════
+
+
 
 // ══════════════════════════════════════════
 // AI 对话
@@ -137,14 +322,12 @@ async function sendChat() {
   isChatting = true;
   document.getElementById("btnSend").disabled = true;
 
-  // 隐藏欢迎界面
   const welcome = document.querySelector(".welcome");
   if (welcome) welcome.style.display = "none";
+  const help = document.querySelector(".help");
+  if (help) help.style.display = "none";
 
-  // 显示用户消息
   appendMessage("user", msg);
-
-  // 显示 AI 加载
   const aiMsgEl = appendMessage("ai", "");
   const bubble = aiMsgEl.querySelector(".msg-bubble");
   bubble.innerHTML = '<div class="loading"></div>';
@@ -155,17 +338,16 @@ async function sendChat() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: msg }),
     });
-
     const data = await resp.json();
     if (data.success) {
       bubble.innerHTML = formatReply(data.reply);
       chatHistory.push({ role: "user", content: msg });
       chatHistory.push({ role: "assistant", content: data.reply });
     } else {
-      bubble.innerHTML = `<span style="color:#ff4d4f">❌ ${data.error}</span>`;
+      bubble.innerHTML = `<span style="color:#ff4d4f">请求失败: ${data.error}</span>`;
     }
   } catch (e) {
-    bubble.innerHTML = `<span style="color:#ff4d4f">❌ 请求失败: ${e.message}</span>`;
+    bubble.innerHTML = `<span style="color:#ff4d4f">请求失败: ${e.message}</span>`;
   }
 
   isChatting = false;
@@ -193,7 +375,6 @@ function appendMessage(role, content) {
 
 function formatReply(text) {
   if (!text) return "";
-  // 简单 Markdown 格式化
   return text
     .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
     .replace(/`(.*?)`/g, "<code>$1</code>")
@@ -208,9 +389,11 @@ function scrollChat() {
 async function clearChat() {
   chatHistory = [];
   const container = document.getElementById("chatMessages");
-  container.innerHTML = "";
-  const welcome = document.querySelector(".welcome");
-  if (welcome) { welcome.style.display = "block"; container.appendChild(welcome); }
+  container.querySelectorAll(".msg").forEach(m => m.remove());
+  const welcome = container.querySelector(".welcome");
+  if (welcome) welcome.style.display = "block";
+  const help = container.querySelector(".help");
+  if (help) help.style.display = "block";
   try { await apiFetch(`${API_BASE}/api/extension/chat/clear`, { method: "POST" }); } catch (e) {}
 }
 
@@ -221,139 +404,297 @@ function autoResize() {
 }
 
 // ══════════════════════════════════════════
-// 抓取
+// 一键抓取
 // ══════════════════════════════════════════
 
-async function toggleScrape() {
-  if (state.running) { stopScrape(); return; }
-  if (!state.jobId) { log("请先选择岗位", "err"); return; }
-  if (!API_KEY) { log("请先配置 API Key", "err"); return; }
-
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  try {
-    const resp = await chrome.tabs.sendMessage(tab.id, { action: "get_page_info" });
-    if (!resp || !resp.isLiepin) { log("请打开猎聘搜索页", "err"); return; }
-    if (resp.cardCount === 0) { log("当前页面没有简历卡片", "err"); return; }
-  } catch (e) { log("无法连接页面，请刷新猎聘", "err"); return; }
-
-  state.running = true;
-  state.currentPage = 0;
-  state.allResumes = [];
-  state.stats = { cards: 0, scraped: 0, filtered: 0, sent: 0 };
-  const maxPages = parseInt(document.getElementById("inputPages").value) || 3;
-
-  document.getElementById("btnScrape").textContent = "⏹ 停止";
-  document.getElementById("scrapeStats").style.display = "block";
-
-  let filterRules = null;
-  try {
-    const resp = await apiFetch(`${API_BASE}/api/extension/filter_rules/${state.jobId}`);
-    const data = await resp.json();
-    if (data.success && data.rules) filterRules = data.rules;
-  } catch (e) {}
-
-  log(`开始抓取，最多 ${maxPages} 页`);
-
-  while (state.running && state.currentPage < maxPages) {
-    state.currentPage++;
-    let result;
-    try { result = await chrome.tabs.sendMessage(tab.id, { action: "scrape_page", filterRules }); }
-    catch (e) { log("页面通信失败", "err"); break; }
-    if (!result) { log("抓取失败", "err"); break; }
-
-    state.stats.cards += result.total;
-    state.stats.filtered += result.filtered;
-    state.stats.scraped += result.resumes.length;
-    updateStats();
-    log(`第${state.currentPage}页: ${result.resumes.length}/${result.total} 份`, result.resumes.length > 0 ? "ok" : "dim");
-
-    // 详情页抓取
-    const detailMode = document.getElementById("selDetailMode").value;
-    if (detailMode === "detail" && result.resumes.length > 0) {
-      log(`开始抓取详情页...`, "info");
-      let linksResp;
-      try { linksResp = await chrome.tabs.sendMessage(tab.id, { action: "get_resume_links" }); } catch (e) {}
-      if (linksResp && linksResp.links) {
-        let detailCount = 0;
-        for (let i = 0; i < Math.min(linksResp.links.length, result.resumes.length); i++) {
-          if (!state.running) break;
-          try {
-            const detailTab = await chrome.tabs.create({ url: linksResp.links[i].url, active: false });
-            await new Promise(r => {
-              const listener = (tid, info) => { if (tid === detailTab.id && info.status === 'complete') { chrome.tabs.onUpdated.removeListener(listener); r(); } };
-              chrome.tabs.onUpdated.addListener(listener);
-              setTimeout(() => { chrome.tabs.onUpdated.removeListener(listener); r(); }, 10000);
-            });
-            await sleep(2000 + Math.random() * 1000);
-            try {
-              const d = await chrome.tabs.sendMessage(detailTab.id, { action: "scrape_detail" });
-              if (d && d.full_text && d.full_text.length > 200) { result.resumes[i].full_text = d.full_text; result.resumes[i].detail_url = d.detail_url; detailCount++; }
-            } catch (e) {}
-            try { await chrome.tabs.remove(detailTab.id); } catch (e) {}
-            await sleep(800 + Math.random() * 1200);
-          } catch (e) {}
-        }
-        log(`详情页: ${detailCount}/${result.resumes.length} 份`, "ok");
-      }
-    }
-
-    // 发送到后端
-    if (result.resumes.length > 0) {
-      try {
-        const resp = await apiFetch(`${API_BASE}/api/extension/submit_batch`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ job_id: state.jobId, resumes: result.resumes }),
-        });
-        const data = await resp.json();
-        if (data.success) { state.stats.sent += result.resumes.length; log(`✓ 已同步 ${result.resumes.length} 份`, "ok"); }
-        else { log(`同步失败: ${data.error}`, "err"); }
-      } catch (e) { log(`同步失败: ${e.message}`, "err"); }
-    }
-
-    // 翻页
-    if (state.currentPage < maxPages) {
-      let nextResp;
-      try { nextResp = await chrome.tabs.sendMessage(tab.id, { action: "click_next_page" }); } catch (e) {}
-      if (!nextResp || !nextResp.success) { log("已到最后一页", "dim"); break; }
-      await sleep(2000 + Math.random() * 1500);
-    }
-  }
-
-  state.running = false;
-  document.getElementById("btnScrape").textContent = "▶ 开始抓取";
-  log(`完成！抓取 ${state.stats.scraped} 份，同步 ${state.stats.sent} 份`, "ok");
+function onQuickScrape() {
+  if (!state.jobId) { alert("请先在顶部选择关联职位"); return; }
+  toggleScrape();
 }
 
-function stopScrape() { state.running = false; document.getElementById("btnScrape").textContent = "▶ 开始抓取"; log("已停止", "info"); }
-function updateStats() { document.getElementById("statCards").textContent = state.stats.cards; document.getElementById("statScraped").textContent = state.stats.scraped; document.getElementById("statFiltered").textContent = state.stats.filtered; document.getElementById("statPage").textContent = state.currentPage; }
+// ══════════════════════════════════════════
+// 抓取（单页精准提取）
+// ══════════════════════════════════════════
+
+let collectedResumes = [];
+
+// 从 storage 恢复已收集的简历
+async function loadCollected() {
+  try {
+    const data = await chrome.storage.local.get("collectedResumes");
+    if (data.collectedResumes && data.collectedResumes.length > 0) {
+      collectedResumes = data.collectedResumes;
+      updateCollectUI();
+      log(`从缓存恢复 ${collectedResumes.length} 份简历`, "dim");
+    }
+  } catch (e) {}
+}
+
+function saveCollected() {
+  chrome.storage.local.set({ collectedResumes });
+}
+
+function updateCollectUI() {
+  const count = collectedResumes.length;
+  const bar = document.getElementById("collectBar");
+  const countEl = document.getElementById("collectedCount");
+  if (count > 0) {
+    bar.style.display = "flex";
+    countEl.textContent = count;
+  } else {
+    bar.style.display = "none";
+  }
+}
+
+async function toggleScrape() {
+  if (!state.jobId) { alert("请先在顶部选择关联职位"); return; }
+  if (!ensureApiKey()) { alert("请先在设置面板填写 API Key"); return; }
+
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab) { alert("无法获取当前标签页"); return; }
+
+  // 直接检查 URL，不依赖 content script
+  if (!tab.url || !tab.url.includes("liepin.com")) {
+    alert(`当前页面不是猎聘 (${tab.url})\n请打开猎聘简历详情页`);
+    return;
+  }
+
+  log("正在抓取当前页面...");
+
+  // 用 scripting API 直接注入提取代码，不依赖 content script
+  let results;
+  try {
+    results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const url = window.location.href;
+        // 尝试 CSS 选择器精准提取
+        const selectors = [
+          ".resume-content", ".resume-main", ".detail-content",
+          ".resume-detail", "[class*='resume-box']", "[class*='resume-body']",
+          "[class*='resume-info']", ".content-left", ".main-content",
+        ];
+        let resumeEl = null;
+        for (const sel of selectors) {
+          resumeEl = document.querySelector(sel);
+          if (resumeEl && resumeEl.innerText.length > 200) break;
+          resumeEl = null;
+        }
+        let fullText = "";
+        let method = "";
+        if (resumeEl) {
+          fullText = resumeEl.innerText.trim();
+          method = "selector";
+        } else {
+          const clone = document.body.cloneNode(true);
+          clone.querySelectorAll(
+            "script, style, noscript, iframe, nav, header, footer, " +
+            "[class*='nav'], [class*='header'], [class*='footer'], " +
+            "[class*='sidebar'], [class*='recommend'], [class*='ad-'], " +
+            "[class*='banner'], [class*='modal'], [class*='popup']"
+          ).forEach(el => el.remove());
+          fullText = (clone.innerText || "").trim();
+          method = "fallback";
+        }
+        if (fullText.length > 12000) fullText = fullText.substring(0, 12000);
+        if (fullText.length < 50) return { success: false, error: "页面内容过短" };
+        // 提取姓名
+        let name = "";
+        const nameEl = document.querySelector("[class*='name'], [class*='title'], h1, h2, .resume-name, .user-name");
+        if (nameEl) { const t = nameEl.innerText.trim(); if (t.length > 1 && t.length < 20) name = t; }
+        return { success: true, full_text: fullText, detail_url: url, name: name, method: method, text_length: fullText.length };
+      },
+    });
+  } catch (e) {
+    alert(`注入失败: ${e.message}`);
+    return;
+  }
+
+  const result = results && results[0] && results[0].result;
+  if (!result || !result.success) {
+    alert(result?.error || "抓取失败，请确认当前页面是猎聘简历详情页");
+    return;
+  }
+
+  // 去重
+  const exists = collectedResumes.some(r => r.detail_url === result.detail_url);
+  if (exists) {
+    log("该简历已收集过，跳过", "dim");
+    return;
+  }
+
+  const resume = {
+    full_text: result.full_text,
+    detail_url: result.detail_url,
+    name: result.name || "未知",
+    collected_at: new Date().toISOString(),
+  };
+  collectedResumes.push(resume);
+  saveCollected();
+  updateCollectUI();
+  log(`✅ 已收集: ${resume.name} (${result.text_length}字, ${result.method})`, "ok");
+}
+
+async function submitResumes() {
+  alert(`submitResumes called: resumes=${collectedResumes.length}, jobId=${state.jobId}`);
+  if (collectedResumes.length === 0) {
+    alert("没有待提交的简历");
+    return;
+  }
+  if (!state.jobId) { alert("请先选择岗位"); return; }
+  if (!ensureApiKey()) { alert("请先配置 API Key"); return; }
+
+  const count = collectedResumes.length;
+  log(`正在提交 ${count} 份简历到后端评分...`);
+
+  try {
+    const resp = await apiFetch(`${API_BASE}/api/extension/submit_batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        job_id: state.jobId,
+        resumes: collectedResumes,
+      }),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      log(`✅ 提交成功！${data.message || ""}`, "ok");
+      collectedResumes = [];
+      saveCollected();
+      updateCollectUI();
+    } else {
+      log(`提交失败: ${data.error}`, "err");
+    }
+  } catch (e) {
+    log(`提交失败: ${e.message}`, "err");
+  }
+}
+
+function clearCollected() {
+  alert(`clearCollected called: resumes=${collectedResumes.length}`);
+  if (collectedResumes.length === 0) { alert("没有简历可清空"); return; }
+  collectedResumes = [];
+  saveCollected();
+  updateCollectUI();
+  alert("已清空");
+}
 
 // ══════════════════════════════════════════
 // 候选人
 // ══════════════════════════════════════════
 
 async function loadResumes(jobId) {
-  if (!jobId) return;
+  if (!jobId) { document.getElementById("resumeList").innerHTML = '<div class="empty">请先选择关联职位</div>'; return; }
   const el = document.getElementById("resumeList");
   el.innerHTML = '<div style="text-align:center;padding:20px"><div class="loading"></div></div>';
   try {
     const resp = await apiFetch(`${API_BASE}/api/extension/resumes/${jobId}`);
     const data = await resp.json();
     if (!data.success || !data.data || data.data.length === 0) { el.innerHTML = '<div class="empty">暂无候选人</div>'; return; }
-    const resumes = data.data.sort((a, b) => ((b.score100 || {}).total_score || 0) - ((a.score100 || {}).total_score || 0));
-    el.innerHTML = resumes.map(r => {
-      const name = r.name || r.title || "未知";
-      const score = (r.score100 || {}).total_score || 0;
-      const cls = score >= 80 ? "score-high" : score >= 60 ? "score-mid" : "score-low";
-      const skills = (r.skill_tags || []).slice(0, 3);
-      return `<div class="resume-card">
-        <span class="score ${cls}">${score || "-"}分</span>
-        <div class="name">${name}</div>
-        <div class="meta">${r.education || ""} · ${r.experience || ""} · ${r.location || ""}</div>
-        <div class="tags">${skills.map(s => `<span class="tag">${s}</span>`).join("")}</div>
-        ${r.detail_url ? `<a href="${r.detail_url}" target="_blank" style="font-size:11px;color:#4a6cf7;text-decoration:none;margin-top:4px;display:inline-block">🔗 查看猎聘简历</a>` : ""}
-      </div>`;
-    }).join("");
+    state.allResumes = data.data;
+    renderResumes();
   } catch (e) { el.innerHTML = '<div class="empty">加载失败</div>'; }
+}
+
+function renderResumes() {
+  const el = document.getElementById("resumeList");
+  if (!state.allResumes || !state.allResumes.length) { el.innerHTML = '<div class="empty">暂无候选人</div>'; return; }
+  const sort = document.getElementById("selSort").value;
+  const filter = document.getElementById("selFilter").value;
+  let list = state.allResumes.slice();
+  const scoreOf = r => ((r.score100 || {}).total_score || 0);
+  if (sort === "score") list.sort((a, b) => scoreOf(b) - scoreOf(a));
+  if (filter === "high") list = list.filter(r => scoreOf(r) >= 80);
+  else if (filter === "mid") list = list.filter(r => scoreOf(r) >= 60 && scoreOf(r) < 80);
+  else if (filter === "low") list = list.filter(r => scoreOf(r) < 60);
+
+  if (!list.length) { el.innerHTML = '<div class="empty">无匹配候选人</div>'; return; }
+
+  el.innerHTML = list.map((r, i) => {
+    const name = r.name || r.title || "未知";
+    const score = scoreOf(r);
+    const cls = score >= 80 ? "score-high" : score >= 60 ? "score-mid" : "score-low";
+    const skills = (r.skill_tags || []).slice(0, 3);
+    const detail = buildResumeDetail(r);
+    return `<div class="resume-card" data-idx="${i}">
+      <span class="score ${cls}">${score || "-"}分</span>
+      <div class="name">${name}</div>
+      <div class="meta">${r.education || ""} · ${r.experience || ""} · ${r.location || ""}</div>
+      <div class="tags">${skills.map(s => `<span class="tag">${s}</span>`).join("")}</div>
+      <div class="resume-detail" id="rd-${i}">${detail}</div>
+      <div class="actions">
+        <div class="mini" data-act="pipe" data-i="${i}">加入管道</div>
+        <div class="mini primary" data-act="ai" data-i="${i}">AI 分析</div>
+      </div>
+      ${r.detail_url ? `<a href="${r.detail_url}" target="_blank" style="font-size:11px;color:#534ab7;text-decoration:none;margin-top:6px;display:inline-block">查看猎聘简历</a>` : ""}
+    </div>`;
+  }).join("");
+
+  el.querySelectorAll(".resume-card").forEach(card => {
+    card.addEventListener("click", e => {
+      if (e.target.closest(".mini") || e.target.closest("a")) return;
+      const i = card.dataset.idx;
+      const d = document.getElementById("rd-" + i);
+      d.classList.toggle("show");
+    });
+  });
+  el.querySelectorAll(".mini[data-act='ai']").forEach(b => b.addEventListener("click", e => {
+    e.stopPropagation();
+    const r = list[parseInt(b.dataset.i)];
+    onAnalyzeCandidate(r);
+  }));
+  el.querySelectorAll(".mini[data-act='pipe']").forEach(b => b.addEventListener("click", e => {
+    e.stopPropagation();
+    const r = list[parseInt(b.dataset.i)];
+    onAddToPipeline(r);
+  }));
+}
+
+function buildResumeDetail(r) {
+  const s = r.score100 || {};
+  let html = "";
+  if (s.recommend_reason) html += `<div class="dd-h">推荐理由</div>${s.recommend_reason}<br>`;
+  if (s.risk) html += `<div class="dd-h">风险点</div>${s.risk}`;
+  if (!html) {
+    const parts = [];
+    if (r.summary) parts.push(r.summary);
+    if (r.highlights) parts.push(r.highlights);
+    html = parts.join("<br>") || "暂无 AI 分析详情";
+  }
+  return html;
+}
+
+// 候选人 → AI 助手（带上下文，自动发问）
+function onAnalyzeCandidate(r) {
+  const name = r.name || r.title || "未知";
+  const score = ((r.score100 || {}).total_score || 0);
+  switchToPanel("chat");
+  document.getElementById("chatInput").value = `分析候选人：${name}，${score}分。给出推荐理由和人才风险点。`;
+  sendChat();
+}
+
+// 候选人 → 管道（跳转 + 待后端接口落地真正录入）
+function onAddToPipeline(r) {
+  const name = r.name || r.title || "未知";
+  const score = ((r.score100 || {}).total_score || 0);
+  const detailUrl = r.detail_url || "";
+
+  if (!state.jobId) { alert("请先选择岗位"); return; }
+  if (!ensureApiKey()) { alert("请先配置 API Key"); return; }
+
+  apiFetch(`${API_BASE}/api/extension/pipeline/${state.jobId}/add`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, detail_url: detailUrl, score }),
+  }).then(resp => resp.json()).then(data => {
+    if (data.success) {
+      alert(data.message || `已将 ${name} 加入管道`);
+    } else {
+      alert(data.error || "加入管道失败");
+    }
+  }).catch(e => {
+    alert(`加入管道失败: ${e.message}`);
+  });
 }
 
 // ══════════════════════════════════════════
@@ -363,21 +704,94 @@ async function loadResumes(jobId) {
 const STAGE_LABELS = { recommended:{label:"AI推荐",color:"#e6f9ee",text:"#52c41a"}, contacted:{label:"已联系",color:"#e8f4fd",text:"#1890ff"}, submitted:{label:"已推荐",color:"#fff7e6",text:"#faad14"}, interview:{label:"面试中",color:"#f0e6ff",text:"#722ed1"}, offer:{label:"Offer",color:"#e6ffe6",text:"#52c41a"}, hired:{label:"已录用",color:"#d4edda",text:"#389e0d"}, rejected:{label:"已淘汰",color:"#fff0f0",text:"#ff4d4f"} };
 
 async function loadPipeline(jobId) {
-  if (!jobId) return;
+  if (!jobId) { document.getElementById("pipelineContent").innerHTML = '<div class="empty">请先选择关联职位</div>'; return; }
   const el = document.getElementById("pipelineContent");
   el.innerHTML = '<div style="text-align:center;padding:20px"><div class="loading"></div></div>';
   try {
-    const resp = await apiFetch(`${API_BASE}/api/pipeline/${jobId}`);
+    const resp = await apiFetch(`${API_BASE}/api/extension/pipeline/${jobId}`);
     const data = await resp.json();
-    if (!data.success) { el.innerHTML = '<div class="empty">加载失败</div>'; return; }
-    const summary = data.summary || {}; const stages = data.stages || {};
-    let html = '<div class="pipeline-bar">';
-    for (const [k, c] of Object.entries(STAGE_LABELS)) { html += `<div class="pipeline-chip" style="background:${c.color};color:${c.text}">${c.label} ${summary[k]||0}</div>`; }
-    html += '</div>';
-    for (const [k, c] of Object.entries(STAGE_LABELS)) { const list = stages[k]||[]; if (!list.length) continue; html += `<div style="margin:8px 0 4px;font-size:11px;color:#888;font-weight:600">${c.label} (${list.length})</div>`; for (const p of list) { html += `<div class="resume-card"><span class="score" style="color:${c.text}">${p.ai_score||"-"}分</span><div class="name">${p.candidate_name||"未知"}</div><div class="meta">${p.reason||""}</div></div>`; } }
-    el.innerHTML = html || '<div class="empty">暂无候选人</div>';
-  } catch (e) { el.innerHTML = '<div class="empty">加载失败</div>'; }
+    if (!data.success) { el.innerHTML = '<div class="empty">加载失败（需后端 /api/extension/pipeline 接口）</div>'; return; }
+    state.pipelineData = { summary: data.summary || {}, stages: data.stages || {} };
+    renderPipelineBar();
+    renderPipeline();
+  } catch (e) {
+    el.innerHTML = '<div class="empty">加载失败（需后端 /api/extension/pipeline 接口）</div>';
+  }
 }
+
+function renderPipelineBar() {
+  const bar = document.getElementById("pipelineBar");
+  const summary = (state.pipelineData || {}).summary || {};
+  bar.innerHTML = Object.entries(STAGE_LABELS).map(([k, c]) =>
+    `<div class="pipeline-chip" data-stage="${k}" style="background:${c.color};color:${c.text}">${c.label} ${summary[k] || 0}</div>`
+  ).join("");
+  if (!state.pipelineFilter) { const first = bar.querySelector(".pipeline-chip"); if (first) first.classList.add("active"); }
+  else { const f = bar.querySelector(`.pipeline-chip[data-stage="${state.pipelineFilter}"]`); if (f) f.classList.add("active"); }
+}
+
+function renderPipeline() {
+  const el = document.getElementById("pipelineContent");
+  const data = state.pipelineData || {};
+  const stages = data.stages || {};
+  const filter = state.pipelineFilter;
+  let html = "";
+  const keys = filter ? [filter] : Object.keys(STAGE_LABELS);
+  for (const k of keys) {
+    const c = STAGE_LABELS[k];
+    const list = stages[k] || [];
+    if (!list.length) continue;
+    html += `<div style="margin:8px 0 4px;font-size:11px;color:#8a90a0;font-weight:600">${c.label} (${list.length})</div>`;
+    for (const p of list) {
+      html += `<div class="resume-card" data-cand="${p.candidate_name || ""}">
+        <span class="score" style="color:${c.text}">${p.ai_score || "-"}分</span>
+        <div class="name">${p.candidate_name || "未知"}</div>
+        <div class="meta">${p.reason || ""}</div>
+        <div class="actions">
+          <div class="mini primary" data-act="ai" data-name="${p.candidate_name || ""}">AI 分析</div>
+          <div class="mini" data-act="delete" data-id="${p.id}" data-name="${p.candidate_name || ""}" style="color:#ff4d4f">删除</div>
+        </div>
+      </div>`;
+    }
+  }
+  if (state.pendingCandidate) {
+    const target = el.querySelector(`.resume-card[data-cand="${cssEsc(state.pendingCandidate)}"]`);
+    if (target) target.style.borderColor = "#7f77dd";
+  }
+  el.innerHTML = html || '<div class="empty">暂无候选人</div>';
+
+  el.querySelectorAll(".mini[data-act='ai']").forEach(b => b.addEventListener("click", () => {
+    onAnalyzeFromPipeline(b.dataset.name);
+  }));
+  el.querySelectorAll(".mini[data-act='delete']").forEach(b => b.addEventListener("click", () => {
+    onDeleteFromPipeline(b.dataset.id, b.dataset.name);
+  }));
+}
+
+// 管道 → AI 助手（带上下文）
+function onAnalyzeFromPipeline(name) {
+  switchToPanel("chat");
+  document.getElementById("chatInput").value = `分析候选人：${name}。结合当前管道阶段，给出下一步建议和人才风险点。`;
+  sendChat();
+}
+
+
+function onDeleteFromPipeline(feedbackId, name) {
+  if (!confirm(`确定删除候选人「${name}」？`)) return;
+  if (!state.jobId || !ensureApiKey()) { alert("请先选择岗位和配置 API Key"); return; }
+
+  apiFetch(`${API_BASE}/api/extension/pipeline/${state.jobId}/delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: parseInt(feedbackId) }),
+  }).then(r => r.json()).then(data => {
+    if (data.success) {
+      loadPipeline(state.jobId);
+    } else {
+      alert(data.error || "删除失败");
+    }
+  }).catch(e => alert(`删除失败: ${e.message}`));
+}
+function cssEsc(s) { return (s || "").replace(/"/g, '\\"'); }
 
 // ══════════════════════════════════════════
 // 设置
@@ -386,32 +800,101 @@ async function loadPipeline(jobId) {
 function saveSettings() {
   const key = document.getElementById("inputApiKey").value.trim();
   const server = document.getElementById("inputServer").value.trim();
-  if (key) API_KEY = key;
-  chrome.storage.local.set({ apiKey: key, serverUrl: server });
-  const msg = document.getElementById("settingsMsg");
-  msg.innerHTML = '<span style="color:#52c41a">✓ 已保存</span>';
-  setTimeout(() => { msg.innerHTML = ""; }, 2000);
-  checkServer().then(() => loadJobs());
+  if (!key) {
+    document.getElementById("settingsMsg").innerHTML = '<span style="color:#ff4d4f">请输入 API Key</span>';
+    return;
+  }
+  API_KEY = key;
+  if (server) API_BASE = server;
+  chrome.storage.local.set({ apiKey: key, serverUrl: server || API_BASE }, () => {
+    console.log("[明猎] 已保存到 storage:", { apiKey: key.substring(0, 6) + "***", serverUrl: server || API_BASE });
+    chrome.storage.local.get(["apiKey", "serverUrl"], (data) => {
+      if (data.apiKey === key) {
+        document.getElementById("settingsMsg").innerHTML = '<span style="color:#52c41a">已保存 ✓</span>';
+      } else {
+        document.getElementById("settingsMsg").innerHTML = '<span style="color:#ff4d4f">保存失败，请重试</span>';
+      }
+    });
+  });
+  checkServer().then(ok => {
+    if (ok) loadJobs();
+  });
 }
 
 async function loadKnowledgeStats() {
+  if (!ensureApiKey()) {
+    document.getElementById("knowledgeStats").innerHTML = '<span style="color:#faad14">请先配置 API Key</span>';
+    return;
+  }
   try {
-    const resp = await apiFetch(`${API_BASE}/api/knowledge/stats`);
+    const resp = await apiFetch(`${API_BASE}/api/extension/knowledge/stats`);
     const data = await resp.json();
     if (data.success) {
-      const el = document.getElementById("knowledgeStats");
-      const d = data.data;
-      el.innerHTML = `共 <strong>${d.total || 0}</strong> 条知识`;
+      document.getElementById("knowledgeStats").innerHTML = `共 ${data.data.total || 0} 条知识`;
+    } else {
+      document.getElementById("knowledgeStats").innerHTML = `<span style="color:#ff4d4f">${data.error || "加载失败"}</span>`;
     }
-  } catch (e) {}
+  } catch (e) {
+    document.getElementById("knowledgeStats").innerHTML = `<span style="color:#ff4d4f">${e.message}</span>`;
+  }
 }
 
 async function refreshKnowledge() {
   try {
-    const resp = await apiFetch(`${API_BASE}/api/knowledge/refresh`, { method: "POST" });
+    const resp = await apiFetch(`${API_BASE}/api/extension/knowledge/refresh`, { method: "POST" });
     const data = await resp.json();
-    if (data.success) { loadKnowledgeStats(); }
+    if (data.success) loadKnowledgeStats();
   } catch (e) {}
+}
+
+async function viewKnowledge() {
+  const el = document.getElementById("knowledgeList");
+  el.innerHTML = '<div style="text-align:center;padding:8px">加载中...</div>';
+  try {
+    const resp = await apiFetch(`${API_BASE}/api/extension/knowledge/list?limit=50`);
+    const data = await resp.json();
+    if (!data.success || !data.data || data.data.length === 0) {
+      el.innerHTML = '<div style="color:#999;padding:8px">暂无知识条目</div>';
+      return;
+    }
+    el.innerHTML = data.data.map(k => {
+      const type = k.knowledge_type || k.type || "";
+      const title = k.title || "";
+      const content = (k.content || "").substring(0, 200);
+      const source = k.source || "";
+      const conf = k.confidence ? Math.round(k.confidence * 100) + "%" : "";
+      return `<div style="padding:8px 0;border-bottom:1px solid #f0f0f0" data-kid="${k.id}">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="font-weight:500;color:#333;font-size:12px">${title || type}</div>
+          <span style="font-size:10px;color:#999;background:#f5f5f5;padding:1px 6px;border-radius:3px">${type}</span>
+        </div>
+        <div style="color:#555;font-size:11px;margin-top:4px;line-height:1.6">${content}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
+          <span style="color:#999;font-size:10px">${source ? "来源: " + source : ""} ${conf ? "可信度: " + conf : ""}</span>
+          <span style="color:#ff4d4f;font-size:11px;cursor:pointer" onclick="deleteKnowledge(${k.id}, this)">删除</span>
+        </div>
+      </div>`;
+    }).join("");
+  } catch (e) {
+    el.innerHTML = `<div style="color:#ff4d4f">加载失败: ${e.message}</div>`;
+  }
+}
+
+function deleteKnowledge(id, el) {
+  if (!confirm("确定删除这条知识？")) return;
+  apiFetch(`${API_BASE}/api/extension/knowledge/delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id }),
+  }).then(r => r.json()).then(data => {
+    if (data.success) {
+      const item = el.closest("[data-kid]");
+      if (item) item.remove();
+      loadKnowledgeStats();
+    } else {
+      alert(data.error || "删除失败");
+    }
+  }).catch(e => alert(`删除失败: ${e.message}`));
 }
 
 // ══════════════════════════════════════════
@@ -420,6 +903,7 @@ async function refreshKnowledge() {
 
 function log(msg, type = "info") {
   const area = document.getElementById("scrapeLog");
+  if (!area) { console.log("[明猎]", msg); return; }
   const entry = document.createElement("div");
   entry.className = `log-entry log-${type}`;
   const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });

@@ -344,6 +344,89 @@
   }
 
   // ══════════════════════════════════════════
+  // 简历详情页精准提取
+  // ══════════════════════════════════════════
+
+  function extractResumeDetail() {
+    const url = window.location.href;
+    const isLiepin = window.location.hostname.includes("liepin");
+
+    if (!isLiepin) {
+      return { success: false, error: "当前页面不是猎聘", detail_url: url };
+    }
+
+    // 尝试 CSS 选择器精准提取
+    const selectors = [
+      ".resume-content",
+      ".resume-main",
+      ".detail-content",
+      ".resume-detail",
+      "[class*='resume-box']",
+      "[class*='resume-body']",
+      "[class*='resume-info']",
+      ".content-left",
+      ".main-content",
+    ];
+
+    let resumeEl = null;
+    for (const sel of selectors) {
+      resumeEl = document.querySelector(sel);
+      if (resumeEl && resumeEl.innerText.length > 200) break;
+      resumeEl = null;
+    }
+
+    let fullText = "";
+    let method = "";
+
+    if (resumeEl) {
+      // 精准提取：只取简历正文区域
+      fullText = resumeEl.innerText.trim();
+      method = "selector";
+    } else {
+      // 兜底：全页提取，过滤噪音
+      const clone = document.body.cloneNode(true);
+      clone.querySelectorAll(
+        "script, style, noscript, iframe, nav, header, footer, " +
+        "[class*='nav'], [class*='header'], [class*='footer'], " +
+        "[class*='sidebar'], [class*='recommend'], [class*='ad-'], " +
+        "[class*='banner'], [class*='modal'], [class*='popup']"
+      ).forEach(el => el.remove());
+      fullText = (clone.innerText || "").trim();
+      method = "fallback";
+    }
+
+    // 截断保护
+    if (fullText.length > 12000) {
+      fullText = fullText.substring(0, 12000);
+    }
+
+    if (fullText.length < 50) {
+      return { success: false, error: "页面内容过短，可能不是简历详情页", detail_url: url };
+    }
+
+    // 提取姓名（简单尝试）
+    let name = "";
+    const nameEl = document.querySelector(
+      "[class*='name'], [class*='title'], h1, h2, .resume-name, .user-name"
+    );
+    if (nameEl) {
+      const nameText = nameEl.innerText.trim();
+      if (nameText.length > 1 && nameText.length < 20) {
+        name = nameText;
+      }
+    }
+
+    return {
+      success: true,
+      full_text: fullText,
+      detail_url: url,
+      name: name,
+      method: method,
+      text_length: fullText.length,
+    };
+  }
+
+  // ══════════════════════════════════════════
   // 消息监听（与 popup/background 通信）
   // ══════════════════════════════════════════
 
@@ -378,6 +461,13 @@
       // 已经在详情页了，提取全文
       const text = extractFullText();
       sendResponse({ full_text: text, detail_url: window.location.href });
+      return true;
+    }
+
+    if (msg.action === "scrape_resume") {
+      // 精准提取简历详情页内容（CSS 选择器优先，兜底全页文本）
+      const result = extractResumeDetail();
+      sendResponse(result);
       return true;
     }
 

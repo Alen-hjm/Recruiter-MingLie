@@ -130,28 +130,15 @@
   <!-- 状态栏 -->
   <div class="status-bar">
     <div class="status-item">
-      <div class="status-num" id="statCards">0</div>
-      <div class="status-label">页面卡片</div>
-    </div>
-    <div class="status-item">
-      <div class="status-num" id="statScraped">0</div>
-      <div class="status-label">已抓取</div>
-    </div>
-    <div class="status-item">
-      <div class="status-num" id="statFiltered">0</div>
-      <div class="status-label">已过滤</div>
-    </div>
-    <div class="status-item">
-      <div class="status-num" id="statPage">0/0</div>
-      <div class="status-label">页数</div>
+      <div class="status-num" id="collectedCount">0</div>
+      <div class="status-label">已收集</div>
     </div>
   </div>
 
   <!-- 操作按钮 -->
   <div class="actions">
-    <button class="btn btn-primary" id="btnStart" style="flex:1">▶ 开始抓取</button>
-    <button class="btn btn-stop" id="btnStop" style="display:none">⏹ 停止</button>
-    <button class="btn btn-primary btn-sm" id="btnSend">📤 发送评分</button>
+    <button class="btn btn-primary" id="btnScrape" style="flex:1">📋 抓取当前页</button>
+    <button class="btn btn-primary btn-sm" id="btnSubmit">📤 提交评分</button>
   </div>
 
   <!-- 日志 -->

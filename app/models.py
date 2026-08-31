@@ -90,6 +90,21 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES users(id)
         );
 
+        CREATE TABLE IF NOT EXISTS search_strategies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            name TEXT NOT NULL DEFAULT '默认搜索',
+            keyword TEXT NOT NULL,
+            city TEXT DEFAULT '上海',
+            platform TEXT DEFAULT 'liepin',
+            max_pages INTEGER DEFAULT 3,
+            is_default INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+
         CREATE TABLE IF NOT EXISTS settings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL UNIQUE,
@@ -140,6 +155,8 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_scrape_user ON scrape_tasks(user_id);
         CREATE INDEX IF NOT EXISTS idx_score_user ON score_tasks(user_id);
         CREATE INDEX IF NOT EXISTS idx_jobs_user ON jobs(user_id);
+        CREATE INDEX IF NOT EXISTS idx_strategies_job ON search_strategies(job_id);
+        CREATE INDEX IF NOT EXISTS idx_strategies_user ON search_strategies(user_id);
     """)
     conn.commit()
 
@@ -214,9 +231,74 @@ def create_user(username: str, password: str, display_name: str = "") -> User:
         user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
         conn.execute("INSERT INTO settings (user_id) VALUES (?)", (user["id"],))
         conn.commit()
-        return User(user["id"], user["username"], user["display_name"])
+        uid = user["id"]
+
+        # ── P0-2: 新用户自动创建示例岗位 + 搜索策略 ──
+        _seed_sample_data(conn, uid)
+
+        return User(uid, user["username"], user["display_name"])
     finally:
         conn.close()
+
+
+def _seed_sample_data(conn, user_id: int):
+    """为新用户创建示例岗位和搜索策略，降低上手门槛"""
+    samples = [
+        {
+            "name": "Python 后端开发",
+            "keyword": "Python",
+            "jd": """岗位职责：
+1. 负责公司核心业务系统的后端开发和维护
+2. 参与系统架构设计，保证系统高可用、高性能
+3. 编写高质量代码，参与代码评审
+4. 与前端、产品团队紧密配合，推进项目落地
+
+任职要求：
+1. 本科及以上学历，计算机相关专业
+2. 3年以上 Python 开发经验
+3. 熟悉 Django/Flask/FastAPI 等框架
+4. 熟悉 MySQL、Redis、消息队列等中间件
+5. 有微服务架构经验优先
+""",
+            "strategies": [
+                {"name": "猎聘-Python", "keyword": "Python开发", "city": "上海"},
+                {"name": "猎聘-后端", "keyword": "后端工程师", "city": "上海"},
+            ],
+        },
+        {
+            "name": "前端工程师",
+            "keyword": "前端",
+            "jd": """岗位职责：
+1. 负责公司 Web 产品的前端开发
+2. 优化前端性能，提升用户体验
+3. 参与前端技术选型和架构设计
+
+任职要求：
+1. 本科及以上学历
+2. 3年以上前端开发经验
+3. 精通 Vue/React 框架
+4. 熟悉 TypeScript、Webpack/Vite
+5. 有移动端 H5 开发经验优先
+""",
+            "strategies": [
+                {"name": "猎聘-前端", "keyword": "前端开发", "city": "上海"},
+            ],
+        },
+    ]
+
+    for job_data in samples:
+        cursor = conn.execute(
+            "INSERT INTO jobs (user_id, name, keyword, job_description) VALUES (?, ?, ?, ?)",
+            (user_id, job_data["name"], job_data["keyword"], job_data["jd"]),
+        )
+        job_id = cursor.lastrowid
+        for i, s in enumerate(job_data["strategies"]):
+            conn.execute(
+                """INSERT INTO search_strategies (job_id, user_id, name, keyword, city, platform, max_pages, is_default)
+                   VALUES (?, ?, ?, ?, ?, 'liepin', 3, ?)""",
+                (job_id, user_id, s["name"], s["keyword"], s.get("city", "上海"), 1 if i == 0 else 0),
+            )
+    conn.commit()
 
 
 def authenticate_user(username: str, password: str) -> User | None:
@@ -492,8 +574,93 @@ def update_job(job_id: int, **kwargs):
 def delete_job(job_id: int):
     conn = get_db()
     try:
+        conn.execute("DELETE FROM search_strategies WHERE job_id = ?", (job_id,))
+        conn.execute("DELETE FROM scrape_tasks WHERE job_id = ?", (job_id,))
+        conn.execute("DELETE FROM interview_feedback WHERE job_id = ?", (job_id,))
         conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ── 搜索策略 CRUD ──
+
+def create_search_strategy(user_id: int, job_id: int, keyword: str, name: str = "默认搜索",
+                           city: str = "上海", platform: str = "liepin",
+                           max_pages: int = 3, is_default: bool = False) -> int:
+    conn = get_db()
+    try:
+        cursor = conn.execute(
+            """INSERT INTO search_strategies (job_id, user_id, name, keyword, city, platform, max_pages, is_default)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (job_id, user_id, name, keyword, city, platform, max_pages, 1 if is_default else 0),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_search_strategies(user_id: int, job_id: int) -> list:
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM search_strategies WHERE user_id = ? AND job_id = ? ORDER BY is_default DESC, created_at DESC",
+            (user_id, job_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_search_strategy(strategy_id: int) -> dict | None:
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM search_strategies WHERE id = ?", (strategy_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def update_search_strategy(strategy_id: int, **kwargs):
+    conn = get_db()
+    try:
+        sets = []
+        vals = []
+        for k, v in kwargs.items():
+            sets.append(f"{k} = ?")
+            vals.append(v)
+        vals.append(strategy_id)
+        conn.execute(f"UPDATE search_strategies SET {', '.join(sets)} WHERE id = ?", vals)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_search_strategy(strategy_id: int):
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM search_strategies WHERE id = ?", (strategy_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_default_strategy(user_id: int, job_id: int) -> dict | None:
+    """获取岗位的默认搜索策略"""
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT * FROM search_strategies WHERE user_id = ? AND job_id = ? AND is_default = 1 LIMIT 1",
+            (user_id, job_id),
+        ).fetchone()
+        if not row:
+            # 没有默认的，取第一个
+            row = conn.execute(
+                "SELECT * FROM search_strategies WHERE user_id = ? AND job_id = ? LIMIT 1",
+                (user_id, job_id),
+            ).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
 

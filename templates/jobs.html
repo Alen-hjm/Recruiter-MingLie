@@ -504,7 +504,9 @@ function renderResumeTable(resumes) {
             const safeKey = rkey.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
             const safeName = name.replace(/'/g, "\\'");
             const score100 = (r.score100 || {}).total_score || 0;
+            const hasFullText = r.full_text && r.full_text.length > 0;
             const actions =
+                (hasFullText ? `<a href="javascript:void(0)" class="op-link" onclick="toggleFullText('${safeKey}')" title="查看全文">📄</a> ` : '') +
                 `<a href="javascript:void(0)" class="op-link" onclick="editResumeName('${safeKey}')" title="编辑姓名">✏️</a> ` +
                 `<a href="javascript:void(0)" class="op-link" onclick="openStatusUpdate('${safeName}',${score100},'')" title="更新状态">📋</a> ` +
                 `<a href="javascript:void(0)" class="op-link" style="color:var(--danger)" onclick="deleteResume('${safeKey}','${safeName}')" title="删除">🗑️</a> ` +
@@ -517,8 +519,14 @@ function renderResumeTable(resumes) {
                 `<td>${scoreCell}</td><td>${statusCell}</td><td>${recCell}</td>` +
                 `<td style="font-size:11px;max-width:220px">${reqCell}</td>` +
                 `<td style="white-space:nowrap">${actions}</td>` +
-                '</tr>';
+                '</tr>' +
+                (hasFullText ? `<tr id="ft-${safeKey}" style="display:none"><td colspan="11" style="padding:12px;background:#f8f9fb;font-size:12px;line-height:1.8;white-space:pre-wrap;max-height:300px;overflow-y:auto">${(r.full_text||'').substring(0,3000).replace(/</g,'&lt;')}</td></tr>` : '');
         }).join('') + '</tbody></table>';
+}
+
+function toggleFullText(resumeKey) {
+    const el = document.getElementById('ft-' + resumeKey);
+    if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
 }
 
 async function editResumeName(resumeKey) {

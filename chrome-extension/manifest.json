@@ -3,7 +3,7 @@
   "name": "明猎 - AI 招聘助手",
   "version": "1.0.0",
   "description": "猎聘简历抓取、AI 评分、候选人管理",
-  "permissions": ["activeTab", "storage", "sidePanel"],
+  "permissions": ["activeTab", "storage", "sidePanel", "scripting"],
   "host_permissions": [
     "https://h.liepin.com/*",
     "http://localhost:5000/*",
@@ -21,7 +21,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://h.liepin.com/*"],
+      "matches": ["https://h.liepin.com/*", "https://*.liepin.com/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
