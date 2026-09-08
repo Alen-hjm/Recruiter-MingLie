@@ -1,0 +1,63 @@
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+SCHEMA = """
+PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS jobs (
+ id INTEGER PRIMARY KEY, name TEXT NOT NULL, jd TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS job_requirements (
+ id INTEGER PRIMARY KEY, job_id INTEGER NOT NULL UNIQUE REFERENCES jobs(id) ON DELETE CASCADE, requirements_json TEXT NOT NULL, provider TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS ingestions (
+ id INTEGER PRIMARY KEY, job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, source TEXT NOT NULL, idempotency_key TEXT UNIQUE, status TEXT NOT NULL, received_count INTEGER NOT NULL DEFAULT 0, created_count INTEGER NOT NULL DEFAULT 0, updated_count INTEGER NOT NULL DEFAULT 0, duplicate_count INTEGER NOT NULL DEFAULT 0, rejected_count INTEGER NOT NULL DEFAULT 0, result_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS candidates (
+ id INTEGER PRIMARY KEY, job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, source TEXT NOT NULL, external_id TEXT NOT NULL, name TEXT NOT NULL, headline TEXT NOT NULL DEFAULT '', location TEXT NOT NULL DEFAULT '', experience_years REAL, education TEXT NOT NULL DEFAULT '', skills_json TEXT NOT NULL DEFAULT '[]', summary TEXT NOT NULL DEFAULT '', raw_json TEXT NOT NULL DEFAULT '{}', stage TEXT NOT NULL DEFAULT 'new', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(job_id, source, external_id)
+);
+CREATE TABLE IF NOT EXISTS candidate_sources (
+ id INTEGER PRIMARY KEY, candidate_id INTEGER NOT NULL REFERENCES candidates(id) ON DELETE CASCADE, ingestion_id INTEGER NOT NULL REFERENCES ingestions(id) ON DELETE CASCADE, payload_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS search_runs (
+ id INTEGER PRIMARY KEY, job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, workflow_run_id INTEGER, provider TEXT NOT NULL, criteria_json TEXT NOT NULL, status TEXT NOT NULL, received_count INTEGER NOT NULL DEFAULT 0, message TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS score_runs (
+ id INTEGER PRIMARY KEY, job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, status TEXT NOT NULL, provider TEXT NOT NULL, candidate_count INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS candidate_scores (
+ id INTEGER PRIMARY KEY, score_run_id INTEGER NOT NULL REFERENCES score_runs(id) ON DELETE CASCADE, candidate_id INTEGER NOT NULL REFERENCES candidates(id) ON DELETE CASCADE, total_score INTEGER NOT NULL, recommendation TEXT NOT NULL, matched_json TEXT NOT NULL, gaps_json TEXT NOT NULL, evidence_json TEXT NOT NULL, provider TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(score_run_id, candidate_id)
+);
+CREATE TABLE IF NOT EXISTS workflow_runs (
+ id INTEGER PRIMARY KEY, job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, status TEXT NOT NULL, trigger TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS workflow_steps (
+ id INTEGER PRIMARY KEY, workflow_run_id INTEGER NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE, tool_name TEXT NOT NULL, status TEXT NOT NULL, input_json TEXT NOT NULL DEFAULT '{}', output_json TEXT NOT NULL DEFAULT '{}', error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS pipeline_events (
+ id INTEGER PRIMARY KEY, candidate_id INTEGER NOT NULL REFERENCES candidates(id) ON DELETE CASCADE, stage TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS feedback (
+ id INTEGER PRIMARY KEY, candidate_id INTEGER NOT NULL REFERENCES candidates(id) ON DELETE CASCADE, kind TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS agent_runs (
+ id INTEGER PRIMARY KEY, job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, message TEXT NOT NULL, status TEXT NOT NULL, workflow_run_id INTEGER, summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS agent_messages (
+ id INTEGER PRIMARY KEY, agent_run_id INTEGER NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+
+def connect(database: str | Path) -> sqlite3.Connection:
+    path = Path(database)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_database(database: str | Path) -> None:
+    with connect(database) as conn:
+        conn.executescript(SCHEMA)

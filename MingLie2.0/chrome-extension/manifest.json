@@ -1,0 +1,1 @@
+{"manifest_version":3,"name":"MingLie 2.0 Candidate Bridge","version":"2.0.0","description":"向本地 MingLie 工作台提交候选人数据","permissions":["storage","activeTab"],"action":{"default_popup":"popup.html"},"content_scripts":[{"matches":["https://*.liepin.com/*"],"js":["content.js"]}]}
