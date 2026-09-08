@@ -41,7 +41,7 @@ def test_demo_workflow_and_agent_are_auditable(app):
     workflow_id = app.extensions["workflows"].start(job["id"], trigger="test", background=False)
     workflow = app.extensions["store"].get_workflow(workflow_id)
     assert workflow["status"] == "completed"
-    assert [x["tool_name"] for x in workflow["steps"]] == ["analyze_jd", "search_candidates", "ingest_candidates", "score_candidates"]
+    assert [x["tool_name"] for x in workflow["steps"]] == ["analyze_jd", "scrape_liepin", "ingest_candidates", "score_candidates"]
     result = RecruiterAgent(app.extensions["store"], app.extensions["workflows"]).run(job["id"], "寻找并排序候选人", background=False)
     assert result["agent_run"]["status"] == "completed"
     assert "评分" in result["agent_run"]["summary"]

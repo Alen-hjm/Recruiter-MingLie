@@ -16,6 +16,11 @@ class ManualSearchProvider:
     def search(self, criteria: dict) -> SearchResult:
         return SearchResult("waiting_input", [], "等待浏览器扩展或已授权的外部采集器按此条件提交候选人")
 
+class PlaywrightSearchProvider:
+    name = "playwright"
+    def search(self, criteria: dict) -> SearchResult:
+        return SearchResult("waiting_input", [], "由 Playwright 采集服务执行")
+
 
 class DemoSearchProvider:
     name = "demo"
@@ -30,4 +35,6 @@ class DemoSearchProvider:
 
 
 def build_search_provider(name: str):
-    return DemoSearchProvider() if name == "demo" else ManualSearchProvider()
+    if name == "demo": return DemoSearchProvider()
+    if name == "playwright": return PlaywrightSearchProvider()
+    return ManualSearchProvider()

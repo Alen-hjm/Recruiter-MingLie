@@ -25,7 +25,11 @@ class Config:
     ROOT = _ROOT
     INSTANCE_PATH = ROOT / "instance"
     DATABASE = Path(os.getenv("MINGLIE_DATABASE", INSTANCE_PATH / "minglie.db"))
-    SEARCH_PROVIDER = os.getenv("MINGLIE_SEARCH_PROVIDER", "manual").lower()
+    SEARCH_PROVIDER = os.getenv("MINGLIE_SEARCH_PROVIDER", "playwright").lower()
+    _browser_path = Path(os.getenv("MINGLIE_BROWSER_DATA_DIR", "instance/browser_data"))
+    BROWSER_DATA_DIR = _browser_path if _browser_path.is_absolute() else ROOT / _browser_path
+    PLAYWRIGHT_CHANNEL = os.getenv("MINGLIE_PLAYWRIGHT_CHANNEL", "chrome")
+    SCRAPE_MAX_PAGES = min(max(int(os.getenv("MINGLIE_SCRAPE_MAX_PAGES", "3")), 1), 5)
     AI_BASE_URL = os.getenv("MINGLIE_AI_BASE_URL", "")
     AI_API_KEY = os.getenv("MINGLIE_AI_API_KEY", "")
     AI_MODEL = os.getenv("MINGLIE_AI_MODEL", "")

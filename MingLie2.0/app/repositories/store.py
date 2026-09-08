@@ -135,6 +135,49 @@ class Store:
             if row: row['scores'] = [_row(x) for x in c.execute("SELECT * FROM candidate_scores WHERE score_run_id=? ORDER BY total_score DESC", (run_id,))]
             return row
 
+    def list_score_runs(self, job_id: int | None = None) -> list[dict]:
+        query = "SELECT * FROM score_runs"; values = ()
+        if job_id is not None: query += " WHERE job_id=?"; values = (job_id,)
+        query += " ORDER BY id DESC"
+        with self._conn() as c: return [_row(x) for x in c.execute(query, values)]
+
+    def create_scrape_run(self, job_id: int, workflow_id: int | None, keyword: str, city: str, max_pages: int, browser_profile: str) -> int:
+        with self._conn() as c:
+            return c.execute("INSERT INTO scrape_runs(job_id,workflow_run_id,keyword,city,max_pages,browser_profile,status,started_at) VALUES(?,?,?,?,?,?, 'queued', CURRENT_TIMESTAMP)", (job_id, workflow_id, keyword, city, max_pages, browser_profile)).lastrowid
+
+    def update_scrape_run(self, run_id: int, status: str, result_count: int | None = None, error_message: str = ''):
+        fields, values = ["status=?"], [status]
+        if result_count is not None: fields.append("result_count=?"); values.append(result_count)
+        if error_message: fields.append("error_message=?"); values.append(error_message)
+        if status in ("completed", "failed", "cancelled"): fields.append("completed_at=CURRENT_TIMESTAMP")
+        values.append(run_id)
+        with self._conn() as c: c.execute(f"UPDATE scrape_runs SET {', '.join(fields)} WHERE id=?", values)
+
+    def add_scrape_log(self, run_id: int, message: str, level: str = 'info'):
+        with self._conn() as c: c.execute("INSERT INTO scrape_logs(scrape_run_id,level,message) VALUES(?,?,?)", (run_id, level, message[:2000]))
+
+    def get_scrape_run(self, run_id: int) -> dict | None:
+        with self._conn() as c: return _row(c.execute("SELECT * FROM scrape_runs WHERE id=?", (run_id,)).fetchone())
+
+    def list_scrape_runs(self, job_id: int | None = None, limit: int = 30) -> list[dict]:
+        query = "SELECT s.*,j.name AS job_name FROM scrape_runs s JOIN jobs j ON j.id=s.job_id"; values=[]
+        if job_id is not None: query += " WHERE s.job_id=?"; values.append(job_id)
+        query += " ORDER BY s.id DESC LIMIT ?"; values.append(limit)
+        with self._conn() as c: return [_row(x) for x in c.execute(query, values)]
+
+    def get_scrape_logs(self, run_id: int) -> list[dict]:
+        with self._conn() as c: return [_row(x) for x in c.execute("SELECT * FROM scrape_logs WHERE scrape_run_id=? ORDER BY id", (run_id,))]
+
+    def pipeline(self, job_id: int) -> dict:
+        stages = {stage: [] for stage in ("new", "contacting", "contacted", "invited", "interviewing", "rejected", "hired")}
+        for candidate in self.list_candidates(job_id): stages.setdefault(candidate['stage'], []).append(candidate)
+        return {"stages": stages, "summary": {**{key: len(value) for key, value in stages.items()}, "total": sum(map(len, stages.values()))}}
+
+    def stats(self) -> dict:
+        with self._conn() as c:
+            jobs = c.execute("SELECT COUNT(*) AS n FROM jobs").fetchone()['n']; candidates=c.execute("SELECT COUNT(*) AS n FROM candidates").fetchone()['n']; scored=c.execute("SELECT COUNT(*) AS n FROM candidate_scores").fetchone()['n']; active=c.execute("SELECT COUNT(*) AS n FROM scrape_runs WHERE status IN ('queued','running','waiting_login')").fetchone()['n']
+            return {"jobs":jobs,"candidates":candidates,"scored":scored,"active_scrapes":active}
+
     def create_workflow(self, job_id: int, trigger: str) -> int:
         with self._conn() as c: return c.execute("INSERT INTO workflow_runs(job_id,status,trigger) VALUES(?,'queued',?)", (job_id,trigger)).lastrowid
 

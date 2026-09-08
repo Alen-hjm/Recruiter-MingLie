@@ -15,6 +15,7 @@ def data(value, status=200): return jsonify({"data": value}), status
 def error(code, message, status=400, details=None): return jsonify({"error": {"code": code, "message": message, "details": details or {}}}), status
 def store(): return current_app.extensions["store"]
 def workflows(): return current_app.extensions["workflows"]
+def scrapes(): return current_app.extensions["scrapes"]
 def agent(): return RecruiterAgent(store(), workflows())
 def body(): return request.get_json(silent=True) or {}
 def job_or_404(job_id):
@@ -24,6 +25,9 @@ def job_or_404(job_id):
 
 @api.get("/health")
 def health(): return data({"status": "ok", "database": str(current_app.config["DATABASE"]), "search_provider": current_app.config["SEARCH_PROVIDER"]})
+
+@api.get("/stats")
+def stats(): return data(store().stats())
 
 @api.route("/jobs", methods=["GET", "POST"])
 def jobs():
@@ -64,6 +68,27 @@ def search(job_id):
     workflow_id=workflows().start(job_id, trigger="search", background=True)
     return data(store().get_workflow(workflow_id), 202)
 
+@api.post("/jobs/<int:job_id>/scrape-runs")
+def start_scrape(job_id):
+    job = job_or_404(job_id)
+    if not job: return error("not_found", "job not found", 404)
+    requirements = store().get_requirements(job_id)
+    criteria = requirements["requirements"] if requirements else analyze_jd(job)
+    run_id = scrapes().start(job_id, criteria, background=True)
+    return data(store().get_scrape_run(run_id), 202)
+
+@api.get("/scrape-runs")
+def scrape_runs(): return data(store().list_scrape_runs(request.args.get("job_id", type=int)))
+
+@api.get("/scrape-runs/<int:run_id>")
+def scrape_run(run_id):
+    value=store().get_scrape_run(run_id); return data(value) if value else error("not_found", "scrape run not found", 404)
+
+@api.get("/scrape-runs/<int:run_id>/logs")
+def scrape_logs(run_id):
+    if not store().get_scrape_run(run_id): return error("not_found", "scrape run not found", 404)
+    return data(store().get_scrape_logs(run_id))
+
 @api.post("/ingestions")
 def ingestion():
     payload=body(); job_id=payload.get("job_id"); source=str(payload.get("source", ""))
@@ -82,6 +107,11 @@ def candidates(job_id):
     if not job_or_404(job_id): return error("not_found", "job not found", 404)
     return data(store().list_candidates(job_id))
 
+@api.get("/jobs/<int:job_id>/pipeline")
+def pipeline_summary(job_id):
+    if not job_or_404(job_id): return error("not_found", "job not found", 404)
+    return data(store().pipeline(job_id))
+
 @api.get("/candidates/<int:candidate_id>")
 def candidate(candidate_id):
     value=store().get_candidate(candidate_id); return data(value) if value else error("not_found", "candidate not found", 404)
@@ -95,6 +125,9 @@ def score(job_id):
 @api.get("/score-runs/<int:run_id>")
 def score_run(run_id):
     value=store().get_score_run(run_id); return data(value) if value else error("not_found", "score run not found", 404)
+
+@api.get("/score-runs")
+def score_runs(): return data(store().list_score_runs(request.args.get("job_id", type=int)))
 
 @api.patch("/candidates/<int:candidate_id>/pipeline")
 def pipeline(candidate_id):
