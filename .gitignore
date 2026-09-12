@@ -1,0 +1,38 @@
+# ============ 敏感数据：绝对不能进 git ============
+# 数据库（含明文 LLM API Key、简历数据）
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/backups/
+data/uploads/
+data/snapshots/
+data/risk_log.jsonl
+
+# Chrome 用户资料（含登录态 cookie）
+browser_data/
+
+# 环境变量
+.env
+.env.*
+!.env.example
+
+# ============ Python ============
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+*.egg-info/
+
+# ============ 项目副本 / 误建目录 ============
+Recruiter-MingLie/
+{app,templates,static/
+docs/superpowers/
+
+# ============ 编辑器 / 系统 ============
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log

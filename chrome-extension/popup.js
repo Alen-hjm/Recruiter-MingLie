@@ -165,6 +165,35 @@ async function startScrape() {
   log(`✅ 已收集: ${resume.name} (${result.text_length}字)`, "ok");
 }
 
+// ══════════════════════════════════════════
+// 直连 DeepSeek 评分（流式）
+// ══════════════════════════════════════════
+
+const SCORE_SYSTEM_PROMPT = `你是一名资深技术招聘顾问。请根据候选人的简历，结合目标岗位，给出简洁的评估。
+要求：
+1. 先给一个 0-100 的综合匹配评分（以“评分：”开头）。
+2. 用 1-2 句话说明推荐理由。
+3. 用 1-2 句话指出风险点或不足。
+4. 列出 3-5 个关键技能标签（以“技能：”开头）。
+全部用中文，总字数不超过 200 字。不要使用 Markdown 代码块。`;
+
+function buildScorePrompt(r, jobName) {
+  const jobCtx = jobName ? `目标岗位：${jobName}\n` : "";
+  const text = (r.full_text || "").slice(0, 6000);
+  return `${jobCtx}候选人姓名：${r.name || "未知"}\n\n简历内容：\n${text}`;
+}
+
+function createEvalEntry(name) {
+  const area = document.getElementById("logArea");
+  if (!area) return { textContent: "" };
+  const entry = document.createElement("div");
+  entry.className = "log-entry log-info";
+  entry.textContent = `⏳ ${name}：连接中...`;
+  area.appendChild(entry);
+  area.scrollTop = area.scrollHeight;
+  return entry;
+}
+
 async function submitResumes() {
   if (state.allResumes.length === 0) {
     // 尝试从 storage 恢复
@@ -181,9 +210,43 @@ async function submitResumes() {
   const jobId = state.jobId || document.getElementById("jobSelect").value;
   if (!jobId) { log("请选择岗位", "err"); return; }
 
+  const dsStored = await chrome.storage.local.get(["dsApiKey", "dsModel"]);
+  const dsKey = dsStored.dsApiKey;
+  const dsModel = dsStored.dsModel || "deepseek-chat";
+
+  // 直连 DeepSeek 流式评分
+  if (dsKey) {
+    const jobName = document.getElementById("jobSelect").selectedOptions?.[0]?.text || "";
+    log(`正在用 DeepSeek 直连评分 ${state.allResumes.length} 份简历...`, "info");
+    let okCount = 0;
+    for (const r of state.allResumes) {
+      const entry = createEvalEntry(r.name || "未知");
+      try {
+        const userPrompt = buildScorePrompt(r, jobName);
+        await window.MinglieDeepseek.streamChat({
+          systemPrompt: SCORE_SYSTEM_PROMPT,
+          userPrompt,
+          apiKey: dsKey,
+          model: dsModel,
+          onToken: (token, full) => { entry.textContent = `✅ ${r.name}：${full}`; },
+        });
+        entry.className = "log-entry log-ok";
+        okCount++;
+      } catch (e) {
+        entry.className = "log-entry log-err";
+        entry.textContent = `❌ ${r.name}：${e.message}`;
+      }
+    }
+    log(`直连评分完成：${okCount}/${state.allResumes.length} 份`, okCount === state.allResumes.length ? "ok" : "warn");
+    state.allResumes = [];
+    chrome.storage.local.remove(["collectedResumes", "collectedJobId"]);
+    document.getElementById("collectedCount").textContent = "0";
+    return;
+  }
+
+  // 回退：后端评分
   const count = state.allResumes.length;
   log(`正在提交 ${count} 份简历到后端评分...`);
-
   try {
     const resp = await apiFetch(`${API_BASE}/api/extension/submit_batch`, {
       method: "POST",
@@ -220,12 +283,16 @@ function sleep(ms) {
 
 document.addEventListener("DOMContentLoaded", async () => {
   // 加载 storage 数据
-  const stored = await chrome.storage.local.get(["apiKey", "serverUrl", "collectedResumes", "collectedJobId"]);
+  const stored = await chrome.storage.local.get(["apiKey", "serverUrl", "collectedResumes", "collectedJobId", "dsApiKey", "dsModel"]);
   if (stored.apiKey) {
     API_KEY = stored.apiKey;
     document.getElementById("apiKeyInput").value = stored.apiKey;
   }
   if (stored.serverUrl) API_BASE = stored.serverUrl;
+  if (stored.dsApiKey) {
+    const dsEl = document.getElementById("dsKeyInput");
+    if (dsEl) dsEl.value = stored.dsApiKey;
+  }
 
   const serverOk = await checkServer();
   if (serverOk) await loadJobs();
@@ -257,23 +324,21 @@ document.getElementById("jobSelect").addEventListener("change", (e) => {
   state.jobId = parseInt(e.target.value) || null;
 });
 
-// API Key 保存
+// API Key 保存（后端 Key 与 DeepSeek Key 各自独立）
 document.getElementById("btnSaveKey").addEventListener("click", () => {
   const key = document.getElementById("apiKeyInput").value.trim();
-  if (!key) {
-    log("请输入 API Key", "err");
+  const dsKey = document.getElementById("dsKeyInput") ? document.getElementById("dsKeyInput").value.trim() : "";
+  if (!key && !dsKey) {
+    log("请至少填写一个 Key（后端或 DeepSeek）", "err");
     return;
   }
   API_KEY = key;
-  chrome.storage.local.set({ apiKey: key, serverUrl: API_BASE }, () => {
-    log("API Key 已保存到本地存储", "ok");
-    chrome.storage.local.get(["apiKey", "serverUrl"], (data) => {
-      if (data.apiKey === key) {
-        log("存储验证成功 ✓", "ok");
-      } else {
-        log("存储验证失败！请重试", "err");
-      }
-    });
-    checkServer().then(ok => { if (ok) loadJobs(); });
+  chrome.storage.local.set({ apiKey: key, serverUrl: API_BASE, dsApiKey: dsKey }, () => {
+    log("Key 已保存到本地存储", "ok");
+    if (key) {
+      checkServer().then(ok => { if (ok) loadJobs(); });
+    } else {
+      log("未填后端 Key：提交评分将走 DeepSeek 直连", "info");
+    }
   });
 });

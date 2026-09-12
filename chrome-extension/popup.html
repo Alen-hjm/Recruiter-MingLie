@@ -114,6 +114,11 @@
       <input type="password" id="apiKeyInput" placeholder="输入你的 LLM API Key">
       <button class="btn btn-sm btn-primary" id="btnSaveKey">保存</button>
     </div>
+    <div class="section-title">⚡ DeepSeek 直连（可选，填了「提交评分」走直连流式）</div>
+    <div class="config-row">
+      <label>DS Key</label>
+      <input type="password" id="dsKeyInput" placeholder="sk-...（DeepSeek API Key）">
+    </div>
     <div class="section-title">📋 抓取配置</div>
     <div class="config-row">
       <label>岗位</label>
@@ -147,6 +152,7 @@
   </div>
   <div class="log" id="logArea"></div>
 
+  <script src="deepseek.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

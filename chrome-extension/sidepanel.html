@@ -285,6 +285,15 @@ body { font-family:"PingFang SC","Microsoft YaHei",sans-serif; background:#edf0f
       <label>服务器</label>
       <input type="text" id="inputServer" value="http://127.0.0.1:5000">
     </div>
+    <div style="margin:10px 0 6px;font-size:11px;color:#929bae">直连 DeepSeek（填了则「提交评分」走直连流式，不依赖后端）</div>
+    <div class="config-row">
+      <label>DS Key</label>
+      <input type="password" id="inputDsKey" placeholder="sk-...（DeepSeek API Key）">
+    </div>
+    <div class="config-row">
+      <label>DS 模型</label>
+      <input type="text" id="inputDsModel" value="deepseek-chat" placeholder="deepseek-chat">
+    </div>
     <div class="btn-group"><button class="btn btn-primary btn-block" id="btnSaveSettings">保存</button></div>
     <div id="settingsMsg" style="margin-top:8px;font-size:12px"></div>
     <div style="margin-top:20px;padding-top:12px;border-top:1px solid #e8ebf1">
@@ -323,6 +332,7 @@ body { font-family:"PingFang SC","Microsoft YaHei",sans-serif; background:#edf0f
   <div class="footer-hint">内容由 AI 生成，请仔细甄别</div>
 </footer>
 
+<script src="deepseek.js"></script>
 <script src="sidepanel.js"></script>
 </body>
 </html>

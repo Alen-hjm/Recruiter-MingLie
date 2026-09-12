@@ -143,6 +143,16 @@ async function initAsync() {
     }
     if (stored.serverUrl) API_BASE = stored.serverUrl;
 
+    // DeepSeek 直连设置
+    if (stored.dsApiKey) {
+      const inputDsKey = document.getElementById("inputDsKey");
+      if (inputDsKey) inputDsKey.value = stored.dsApiKey;
+    }
+    if (stored.dsModel) {
+      const inputDsModel = document.getElementById("inputDsModel");
+      if (inputDsModel) inputDsModel.value = stored.dsModel;
+    }
+
     // 检查服务器
     const serverOk = await checkServer();
     if (serverOk) {
@@ -536,14 +546,50 @@ async function toggleScrape() {
 }
 
 async function submitResumes() {
-  alert(`submitResumes called: resumes=${collectedResumes.length}, jobId=${state.jobId}`);
   if (collectedResumes.length === 0) {
-    alert("没有待提交的简历");
+    log("没有待提交的简历，请先抓取", "err");
     return;
   }
   if (!state.jobId) { alert("请先选择岗位"); return; }
-  if (!ensureApiKey()) { alert("请先配置 API Key"); return; }
 
+  const stored = await chrome.storage.local.get(["dsApiKey", "dsModel"]);
+  const dsKey = stored.dsApiKey;
+  const dsModel = stored.dsModel || "deepseek-chat";
+
+  // 直连 DeepSeek 流式评分
+  if (dsKey) {
+    log(`正在用 DeepSeek 直连评分 ${collectedResumes.length} 份简历...`, "info");
+    let okCount = 0;
+    for (const r of collectedResumes) {
+      const entry = createEvalEntry(r.name || "未知");
+      try {
+        const userPrompt = buildScorePrompt(r, state.jobName);
+        await window.MinglieDeepseek.streamChat({
+          systemPrompt: SCORE_SYSTEM_PROMPT,
+          userPrompt,
+          apiKey: dsKey,
+          model: dsModel,
+          onToken: (token, full) => { entry.textContent = `✅ ${r.name}：${full}`; },
+        });
+        entry.className = "log-entry log-ok";
+        okCount++;
+      } catch (e) {
+        entry.className = "log-entry log-err";
+        entry.textContent = `❌ ${r.name}：${e.message}`;
+      }
+    }
+    log(
+      `直连评分完成：${okCount}/${collectedResumes.length} 份`,
+      okCount === collectedResumes.length ? "ok" : "warn"
+    );
+    collectedResumes = [];
+    saveCollected();
+    updateCollectUI();
+    return;
+  }
+
+  // 回退：后端评分
+  if (!ensureApiKey()) { alert("请先配置 API Key（或填写 DeepSeek Key 走直连）"); return; }
   const count = collectedResumes.length;
   log(`正在提交 ${count} 份简历到后端评分...`);
 
@@ -800,25 +846,33 @@ function cssEsc(s) { return (s || "").replace(/"/g, '\\"'); }
 function saveSettings() {
   const key = document.getElementById("inputApiKey").value.trim();
   const server = document.getElementById("inputServer").value.trim();
-  if (!key) {
-    document.getElementById("settingsMsg").innerHTML = '<span style="color:#ff4d4f">请输入 API Key</span>';
+  const dsKey = document.getElementById("inputDsKey").value.trim();
+  const dsModel = document.getElementById("inputDsModel").value.trim() || "deepseek-chat";
+  if (!key && !dsKey) {
+    document.getElementById("settingsMsg").innerHTML = '<span style="color:#ff4d4f">请至少填写一个 Key（后端或 DeepSeek）</span>';
     return;
   }
   API_KEY = key;
   if (server) API_BASE = server;
-  chrome.storage.local.set({ apiKey: key, serverUrl: server || API_BASE }, () => {
-    console.log("[明猎] 已保存到 storage:", { apiKey: key.substring(0, 6) + "***", serverUrl: server || API_BASE });
-    chrome.storage.local.get(["apiKey", "serverUrl"], (data) => {
-      if (data.apiKey === key) {
-        document.getElementById("settingsMsg").innerHTML = '<span style="color:#52c41a">已保存 ✓</span>';
-      } else {
-        document.getElementById("settingsMsg").innerHTML = '<span style="color:#ff4d4f">保存失败，请重试</span>';
-      }
+  chrome.storage.local.set(
+    { apiKey: key, serverUrl: server || API_BASE, dsApiKey: dsKey, dsModel },
+    () => {
+      console.log("[明猎] 已保存到 storage:", {
+        apiKey: key ? key.substring(0, 6) + "***" : "(空)",
+        serverUrl: server || API_BASE,
+        dsApiKey: dsKey ? dsKey.substring(0, 6) + "***" : "(空)",
+      });
+      document.getElementById("settingsMsg").innerHTML = '<span style="color:#52c41a">已保存 ✓</span>';
+    }
+  );
+  // 仅当填了后端 Key 才去探测后端
+  if (key) {
+    checkServer().then(ok => {
+      if (ok) loadJobs();
     });
-  });
-  checkServer().then(ok => {
-    if (ok) loadJobs();
-  });
+  } else {
+    loadJobs();
+  }
 }
 
 async function loadKnowledgeStats() {
@@ -895,6 +949,35 @@ function deleteKnowledge(id, el) {
       alert(data.error || "删除失败");
     }
   }).catch(e => alert(`删除失败: ${e.message}`));
+}
+
+// ══════════════════════════════════════════
+// 直连 DeepSeek 评分（流式）
+// ══════════════════════════════════════════
+
+const SCORE_SYSTEM_PROMPT = `你是一名资深技术招聘顾问。请根据候选人的简历，结合目标岗位，给出简洁的评估。
+要求：
+1. 先给一个 0-100 的综合匹配评分（以“评分：”开头）。
+2. 用 1-2 句话说明推荐理由。
+3. 用 1-2 句话指出风险点或不足。
+4. 列出 3-5 个关键技能标签（以“技能：”开头）。
+全部用中文，总字数不超过 200 字。不要使用 Markdown 代码块。`;
+
+function buildScorePrompt(r, jobName) {
+  const jobCtx = jobName ? `目标岗位：${jobName}\n` : "";
+  const text = (r.full_text || "").slice(0, 6000);
+  return `${jobCtx}候选人姓名：${r.name || "未知"}\n\n简历内容：\n${text}`;
+}
+
+function createEvalEntry(name) {
+  const area = document.getElementById("scrapeLog");
+  if (!area) return { textContent: "" };
+  const entry = document.createElement("div");
+  entry.className = "log-entry log-info";
+  entry.textContent = `⏳ ${name}：连接中...`;
+  area.appendChild(entry);
+  area.scrollTop = area.scrollHeight;
+  return entry;
 }
 
 // ══════════════════════════════════════════
