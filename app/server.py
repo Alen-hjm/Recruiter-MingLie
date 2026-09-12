@@ -4,6 +4,7 @@
 import asyncio
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -11,7 +12,7 @@ from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from flask import Flask, jsonify, request, redirect, url_for, render_template, flash
+from flask import Flask, jsonify, request, redirect, url_for, render_template, flash, send_file
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 
 from .models import (
@@ -2229,3 +2230,143 @@ def api_extension_knowledge_delete():
         return jsonify({"success": True, "message": "已删除"})
     finally:
         conn.close()
+
+
+# ==================================================================
+#  推荐报告（模板驱动）
+# ------------------------------------------------------------------
+#  报告内容只来自「简历原文」与「评分阶段已生成的内容」，
+#  不调用 LLM 重新生成叙述性文字 —— 避免二次幻觉，也省一次调用。
+# ==================================================================
+
+def _resume_key(resume):
+    """候选人唯一键：优先 detail_url，退化为 name+title"""
+    return resume.get("detail_url", "") or (
+        str(resume.get("name", "")) + str(resume.get("title", "") or resume.get("work_summary", "") or "")
+    )
+
+
+def _find_resume_and_score(user_id, job_id, resume_key):
+    """按 key 找简历 + 对应评分；返回 (resume, score100, error)"""
+    resumes = get_resumes_by_job(user_id, job_id) or []
+    target = None
+    for r in resumes:
+        if _resume_key(r) == resume_key:
+            target = r
+            break
+    if target is None:
+        try:
+            idx = int(resume_key)
+            if 0 <= idx < len(resumes):
+                target = resumes[idx]
+        except (TypeError, ValueError):
+            pass
+    if target is None:
+        return None, None, "未找到候选人（key=%s）" % resume_key
+
+    score100 = {}
+    conn = get_db()
+    try:
+        row = conn.execute(
+            """SELECT scored_json FROM score_tasks
+               WHERE user_id = ? AND status = 'done' AND scored_json IS NOT NULL
+               AND job_name = (SELECT name FROM jobs WHERE id = ?)
+               ORDER BY created_at DESC LIMIT 1""",
+            (user_id, job_id),
+        ).fetchone()
+        if row and row["scored_json"]:
+            for sr in json.loads(row["scored_json"]):
+                if _resume_key(sr) == _resume_key(target):
+                    score100 = sr.get("score100") or {}
+                    break
+    finally:
+        conn.close()
+
+    return target, score100, None
+
+
+@app.route("/api/report/candidate", methods=["POST"])
+@login_required
+def api_report_candidate():
+    """生成单个候选人的推荐报告（JSON，供前端预览）"""
+    data = request.json or {}
+    job_id = data.get("job_id")
+    resume_key = data.get("resume_key", "")
+    template_id = data.get("template_id", "headhunter_v1")
+
+    if not job_id or resume_key == "":
+        return jsonify({"success": False, "error": "缺少 job_id 或 resume_key"}), 400
+
+    job = get_job(job_id)
+    if not job or job["user_id"] != current_user.id:
+        return jsonify({"success": False, "error": "岗位不存在"}), 404
+
+    resume, score100, err = _find_resume_and_score(current_user.id, job_id, resume_key)
+    if err:
+        return jsonify({"success": False, "error": err}), 404
+
+    try:
+        from .report_engine import build_report, render_markdown
+        report = build_report(resume, score100, job=job, template_id=template_id)
+        return jsonify({
+            "success": True,
+            "data": {
+                "markdown": render_markdown(report),
+                "sections": report["sections"],
+                "validation": report["validation"],
+                "meta": report["meta"],
+            },
+        })
+    except FileNotFoundError as e:
+        return jsonify({"success": False, "error": "模板不存在: %s" % e}), 404
+    except Exception as e:
+        return jsonify({"success": False, "error": "生成失败: %s" % e}), 500
+
+
+@app.route("/api/report/candidate/download", methods=["POST"])
+@login_required
+def api_report_candidate_download():
+    """下载推荐报告（.docx）"""
+    data = request.json or {}
+    job_id = data.get("job_id")
+    resume_key = data.get("resume_key", "")
+    template_id = data.get("template_id", "headhunter_v1")
+
+    if not job_id or resume_key == "":
+        return jsonify({"success": False, "error": "缺少参数"}), 400
+
+    job = get_job(job_id)
+    if not job or job["user_id"] != current_user.id:
+        return jsonify({"success": False, "error": "岗位不存在"}), 404
+
+    resume, score100, err = _find_resume_and_score(current_user.id, job_id, resume_key)
+    if err:
+        return jsonify({"success": False, "error": err}), 404
+
+    try:
+        from .report_engine import build_report, render_docx
+        report = build_report(resume, score100, job=job, template_id=template_id)
+
+        out_dir = Path("data/backups")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = re.sub(r'[\\/:*?"<>|]', "_", str(resume.get("name", "候选人")))[:20]
+        fname = "推荐报告_%s_%s.docx" % (safe_name, datetime.now().strftime("%m%d%H%M"))
+        # 注意：必须是绝对路径。Flask 的 send_file 会把相对路径解析到 app.root_path
+        #（也就是 app/ 目录）下，而不是当前工作目录，会报"找不到路径"。
+        fpath = (out_dir / fname).resolve()
+        render_docx(report, str(fpath))
+
+        return send_file(str(fpath), as_attachment=True, download_name=fname)
+    except Exception as e:
+        return jsonify({"success": False, "error": "生成失败: %s" % e}), 500
+
+
+@app.route("/api/report/templates")
+@login_required
+def api_report_templates():
+    """列出可用报告模板"""
+    try:
+        from .report_engine import list_templates
+        return jsonify({"success": True, "data": list_templates()})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500

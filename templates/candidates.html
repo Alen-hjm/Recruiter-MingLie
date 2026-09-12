@@ -182,9 +182,13 @@ function renderTab() {
                 <button class="btn btn-danger btn-sm" onclick="openRejectModal(${idx})">❌ 淘汰</button>
                 <div style="display:flex;gap:6px;margin-left:auto">
                     ${resume.organized_text ? `<button class="btn btn-default btn-sm" onclick="showOrganizedResume(${idx})">📋 AI整理简历</button>` : ''}
+                    <button class="btn btn-default btn-sm" onclick="generateReport('${encodeURIComponent(resumeKey(resume))}')">📄 生成报告</button>
                     ${resume.detail_url ? `<a href="${resume.detail_url}" target="_blank" class="btn btn-default btn-sm">查看简历</a>` : ''}
                 </div>
-            </div>` : ''}
+            </div>` : `
+            <div style="display:flex;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid #eee">
+                <button class="btn btn-default btn-sm" onclick="generateReport('${encodeURIComponent(resumeKey(resume))}')">📄 生成报告</button>
+            </div>`}
         </div>`;
     });
     html += '</div>';
@@ -279,6 +283,102 @@ document.head.appendChild(style);
 loadJobs();
 
 // 显示 AI 整理的简历
+// 与后端 _resume_key() 保持一致：优先 detail_url，退化为 name+title
+function resumeKey(r) {
+    return r.detail_url || (String(r.name || '') + String(r.title || r.work_summary || ''));
+}
+
+// 极简 Markdown 渲染（只支持粗体/列表/标题/表格行，够预览用）
+function miniMarkdown(text) {
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return esc(text)
+        .replace(/^# (.+)$/gm, '<h3 style="margin:14px 0 8px">$1</h3>')
+        .replace(/^## (.+)$/gm, '<h4 style="margin:16px 0 6px;color:#333;border-bottom:1px solid #eee;padding-bottom:4px">$1</h4>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/^- (.+)$/gm, '<div style="margin:3px 0 3px 12px">• $1</div>')
+        .replace(/^> (.+)$/gm, '<div style="color:#888;font-size:12px;margin:6px 0;padding-left:10px;border-left:3px solid #ddd">$1</div>')
+        .replace(/\|(.+)\|/g, (m, inner) => {
+            const cells = inner.split('|').map(c => c.trim()).filter(Boolean);
+            if (!cells.length) return m;
+            return '<div style="display:flex;gap:12px;padding:3px 0;border-bottom:1px solid #f0f0f0">'
+                + cells.map((c, i) => `<div style="${i === 0 ? 'width:110px;color:#888;flex:none' : 'flex:1'}">${c}</div>`).join('')
+                + '</div>';
+        })
+        .replace(/\n/g, '<br>');
+}
+
+let _currentReportKey = '';
+
+async function generateReport(encodedKey) {
+    const resumeKeyVal = decodeURIComponent(encodedKey);
+    _currentReportKey = resumeKeyVal;
+    if (!currentJobId) { alert('请先选择岗位'); return; }
+
+    const modal = document.createElement('div');
+    modal.id = 'reportModal';
+    modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1001;display:flex;align-items:center;justify-content:center';
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+    modal.innerHTML = `
+        <div style="background:#fff;border-radius:12px;width:92%;max-width:760px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.2)">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:20px 24px 12px;border-bottom:1px solid #eee">
+                <h3 style="margin:0">📄 推荐报告</h3>
+                <button onclick="document.getElementById('reportModal').remove()" style="background:none;border:none;font-size:20px;cursor:pointer">✕</button>
+            </div>
+            <div id="reportBody" style="padding:20px 24px;overflow:auto;flex:1">
+                <div style="text-align:center;padding:40px;color:#999">正在生成…</div>
+            </div>
+            <div style="padding:12px 24px 20px;border-top:1px solid #eee;display:flex;gap:8px;justify-content:flex-end">
+                <button class="btn btn-default" onclick="document.getElementById('reportModal').remove()">关闭</button>
+                <button class="btn btn-primary" id="downloadReportBtn" style="display:none" onclick="downloadReport()">⬇️ 下载 Word</button>
+            </div>
+        </div>`;
+    document.body.appendChild(modal);
+
+    try {
+        const resp = await fetch('/api/report/candidate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job_id: currentJobId, resume_key: resumeKeyVal })
+        });
+        const result = await resp.json();
+        const body = document.getElementById('reportBody');
+        if (!result.success) {
+            body.innerHTML = `<div style="color:#c0392b;padding:20px">生成失败：${result.error || '未知错误'}</div>`;
+            return;
+        }
+        const v = result.data.validation || {};
+        const warn = (!v.ok) ? `
+            <div style="background:#fff7e6;border:1px solid #ffd591;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:#ad6800">
+                ⚠️ 有 ${(v.need_human || []).length} 项需要人工确认后再发给客户
+                ${(v.need_human || []).length ? '：' + v.need_human.join('、') : ''}
+            </div>` : '';
+        body.innerHTML = warn + `<div style="line-height:1.75;font-size:13.5px;color:#333">${miniMarkdown(result.data.markdown)}</div>`;
+        document.getElementById('downloadReportBtn').style.display = '';
+    } catch (e) {
+        document.getElementById('reportBody').innerHTML =
+            `<div style="color:#c0392b;padding:20px">请求失败：${e.message}</div>`;
+    }
+}
+
+async function downloadReport() {
+    if (!currentJobId || !_currentReportKey) return;
+    try {
+        const resp = await fetch('/api/report/candidate/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job_id: currentJobId, resume_key: _currentReportKey })
+        });
+        if (!resp.ok) { alert('下载失败'); return; }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = '推荐报告.docx';
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+    } catch (e) { alert('下载失败：' + e.message); }
+}
+
 function showOrganizedResume(idx) {
     const list = candidatesData[currentTab];
     const resume = list[idx];

@@ -1,0 +1,123 @@
+# 明猎 · 推荐报告模板 v1
+#
+# 怎么改模板：直接改这个文件的 sections 列表即可，不需要动 Python 代码。
+#   - 加字段：在对应 section 的 fields 里加一项
+#   - 改顺序：调整 sections 的排列顺序
+#   - 改标题：改 title
+#
+# source 三种，含义不同，别乱填：
+#   code   —— 由代码从数据结构直接取值，绝不经过 LLM（防止编造）
+#   resume —— 简历原文直引，禁止 LLM 改写
+#   llm    —— 由 LLM 生成，但必须附原文证据，证据对不上会被丢弃
+#
+# expr 只支持 "a.b.c" 路径取值，不支持任何表达式（安全考虑，不会 eval）
+
+id: headhunter_v1
+name: 标准推荐报告
+version: 1
+
+sections:
+
+  # ---------------------------------------------------------- 基本信息
+  - key: basic
+    title: 基本信息
+    type: table
+    fields:
+      - key: name
+        label: 姓名
+        source: code
+        expr: parsed.name.value
+        required: true
+        note: 猎聘页面为脱敏显示（如"叶先生"），真实姓名需人工确认
+      - key: gender
+        label: 性别
+        source: code
+        expr: parsed.basic.gender
+      - key: age
+        label: 年龄
+        source: code
+        expr: parsed.basic.age
+      - key: education
+        label: 学历
+        source: code
+        expr: parsed.basic.education
+      - key: experience_years
+        label: 工作年限
+        source: code
+        expr: parsed.basic.experience_years
+      - key: city
+        label: 所在城市
+        source: code
+        expr: parsed.basic.city
+      - key: expect_position
+        label: 期望职位
+        source: code
+        expr: parsed.expect.position
+      - key: expect_salary
+        label: 期望薪资
+        source: code
+        expr: parsed.expect.salary
+      - key: total_score
+        label: AI 匹配评分
+        source: code
+        expr: score.total_score
+        format: "{value} 分"
+        note: 分数由评分模块给出，非本报告生成
+
+  # ---------------------------------------------------------- LLM 生成
+  - key: recommend_reason
+    title: 推荐理由
+    type: list
+    source: score
+    expr: score.highlights
+    note: 复用评分阶段基于简历原文生成的亮点，不二次加工、不重新生成
+
+  # ---------------------------------------------------------- 原文直引
+  - key: work
+    title: 工作经历
+    type: text
+    source: resume
+    expr: parsed.sections.work.content
+    max_chars: 2500
+
+  - key: project
+    title: 项目经历
+    type: text
+    source: resume
+    expr: parsed.sections.project.content
+    max_chars: 1500
+
+  - key: education
+    title: 教育经历
+    type: text
+    source: resume
+    expr: parsed.sections.education.content
+    max_chars: 800
+
+  - key: cert
+    title: 证书与技能
+    type: text
+    source: resume
+    expr: parsed.sections.cert.content
+    max_chars: 800
+
+  - key: evaluation
+    title: 自我评价
+    type: text
+    source: resume
+    expr: parsed.sections.evaluation.content
+    max_chars: 1200
+
+  # ---------------------------------------------------------- LLM 生成
+  - key: overall_comment
+    title: 综合评价
+    type: text
+    source: score
+    expr: score.summary
+
+  - key: risk_note
+    title: 风险提示
+    type: list
+    source: score
+    expr: score.concerns
+    note: 评分阶段给出的顾虑点；与硬性条件冲突的会另列在 fail_reasons
