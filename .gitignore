@@ -1,12 +1,11 @@
 # ============ 敏感数据：绝对不能进 git ============
-# 数据库（含明文 LLM API Key、简历数据）
-data/*.db
-data/*.db-wal
-data/*.db-shm
-data/backups/
-data/uploads/
-data/snapshots/
-data/risk_log.jsonl
+# data/ 是运行时数据目录，一律不入库：
+#   - minglie.db          数据库，含明文 LLM API Key、用户、岗位、简历
+#   - liepin_resumes_*.csv/json   抓取到的真实候选人简历
+#   - latest.json / backups/ / uploads/ / snapshots/   运行产物
+# 只保留 .gitkeep 占位，保证克隆后目录存在
+data/*
+!data/.gitkeep
 
 # Chrome 用户资料（含登录态 cookie）
 browser_data/
@@ -36,3 +35,6 @@ docs/superpowers/
 .DS_Store
 Thumbs.db
 *.log
+
+# ============ 助手工作区（含本地记忆文件，不入库） ============
+.workbuddy/
