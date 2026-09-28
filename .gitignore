@@ -26,8 +26,10 @@ venv/
 
 # ============ 项目副本 / 误建目录 ============
 Recruiter-MingLie/
-{app,templates,static/
 docs/superpowers/
+
+# 冒烟测试产生的临时数据
+.smoke_data/
 
 # ============ 编辑器 / 系统 ============
 .vscode/

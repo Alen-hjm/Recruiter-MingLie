@@ -4,17 +4,21 @@
  */
 
 let API_BASE = "http://127.0.0.1:5000";
-let API_KEY = "";
+let API_TOKEN = "";   // 扩展访问令牌（推荐），与 LLM Key 无关
+let API_KEY = "";     // 兼容旧配置：LLM Key 当凭据（后端可在兼容期内接受）
 
-// 从 storage 加载 API Key 和 Server URL
-chrome.storage.local.get(["apiKey", "serverUrl"], (data) => {
+// 从 storage 加载令牌 / 旧 Key / Server URL
+chrome.storage.local.get(["apiToken", "apiKey", "serverUrl"], (data) => {
+  if (data.apiToken) API_TOKEN = data.apiToken;
   if (data.apiKey) API_KEY = data.apiKey;
   if (data.serverUrl) API_BASE = data.serverUrl;
 });
 
 function apiFetch(url, options = {}) {
   const headers = { ...options.headers };
-  if (API_KEY) headers["X-API-Key"] = API_KEY;
+  // 优先用访问令牌；没有令牌时才回落到旧的 LLM Key 凭据
+  if (API_TOKEN) headers["X-API-Token"] = API_TOKEN;
+  else if (API_KEY) headers["X-API-Key"] = API_KEY;
   return fetch(url, { ...options, headers }).catch(e => {
     throw new Error(`网络请求失败 (${e.message})：请确认后端服务已启动在 ${API_BASE}`);
   });
@@ -283,7 +287,12 @@ function sleep(ms) {
 
 document.addEventListener("DOMContentLoaded", async () => {
   // 加载 storage 数据
-  const stored = await chrome.storage.local.get(["apiKey", "serverUrl", "collectedResumes", "collectedJobId", "dsApiKey", "dsModel"]);
+  const stored = await chrome.storage.local.get(["apiToken", "apiKey", "serverUrl", "collectedResumes", "collectedJobId", "dsApiKey", "dsModel"]);
+  if (stored.apiToken) {
+    API_TOKEN = stored.apiToken;
+    const tokenEl = document.getElementById("apiTokenInput");
+    if (tokenEl) tokenEl.value = stored.apiToken;
+  }
   if (stored.apiKey) {
     API_KEY = stored.apiKey;
     document.getElementById("apiKeyInput").value = stored.apiKey;

@@ -83,12 +83,23 @@
         <div class="card-title">🔌 Chrome 插件连接</div>
     </div>
     <div style="padding:4px 0">
-        <p style="color:#666;font-size:13px;margin-bottom:12px">安装「明猎」Chrome 插件后，在猎聘简历页一键评分。将下方 API Key 填入插件设置即可连接。</p>
+        <p style="color:#666;font-size:13px;margin-bottom:12px">安装「明猎」Chrome 插件后，在猎聘简历页一键评分。生成一个访问令牌填入插件即可连接。</p>
+        <p style="color:#8a6d3b;background:#fcf8e3;border:1px solid #faebcc;border-radius:6px;padding:8px 10px;font-size:12px;margin-bottom:12px">
+            令牌与 LLM API Key 相互独立：令牌只用于访问本机后端，可随时撤销；<br>
+            即使令牌泄露，也不会连带暴露你的大模型密钥与余额。
+        </p>
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-            <input type="text" id="extension-api-key" class="form-input" readonly style="font-family:monospace;font-size:13px;background:#f5f5f5">
-            <button onclick="copyApiKey()" class="btn" style="white-space:nowrap;padding:8px 16px">复制</button>
+            <input type="text" id="extension-api-token" class="form-input" readonly
+                   placeholder="点击右侧按钮生成" style="font-family:monospace;font-size:13px;background:#f5f5f5">
+            <button onclick="generateToken()" class="btn btn-primary" style="white-space:nowrap;padding:8px 16px">生成</button>
+            <button onclick="copyToken()" class="btn" style="white-space:nowrap;padding:8px 16px">复制</button>
         </div>
-        <div id="api-key-status" style="font-size:12px;color:#999"></div>
+        <div id="api-token-status" style="font-size:12px;color:#999;margin-bottom:12px"></div>
+        <div style="font-size:12px;color:#666;margin-bottom:6px">已签发的令牌</div>
+        <div id="token-list" style="font-size:12px;color:#999">加载中…</div>
+        <div style="margin-top:10px">
+            <button onclick="revokeAllTokens()" class="btn btn-sm" style="color:#b02a37">撤销全部令牌</button>
+        </div>
     </div>
 </div>
 {% endblock %}
@@ -100,7 +111,12 @@ async function loadSettings() {
     if (!resp.success) return;
     const d = resp.data;
 
-    document.getElementById('llm-key').value = d.llm_api_key || '';
+    // 明文 Key 不回传，只给脱敏提示；留空表示「不修改已保存的 Key」
+    const keyEl = document.getElementById('llm-key');
+    keyEl.value = '';
+    keyEl.placeholder = d.llm_api_key_masked
+        ? ('已保存：' + d.llm_api_key_masked + '（留空则不修改）')
+        : (d.llm_key_from_env ? '未在页面配置，将使用服务端环境变量' : 'sk-... 或兼容接口的 Key');
     document.getElementById('llm-url').value = d.llm_base_url || 'https://api.deepseek.com';
     document.getElementById('llm-model').value = d.llm_model || 'deepseek-chat';
     document.getElementById('obsidian-kb').value = d.obsidian_kb_path || '';
@@ -112,13 +128,17 @@ async function loadSettings() {
 // 保存 LLM 配置
 document.getElementById('llm-form').addEventListener('submit', async (e) => {
     e.preventDefault();
+    // Key 留空 = 不修改（否则会把已保存的 Key 清成空串）
+    const payload = {
+        llm_base_url: document.getElementById('llm-url').value.trim(),
+        llm_model: document.getElementById('llm-model').value.trim(),
+    };
+    const typedKey = document.getElementById('llm-key').value.trim();
+    if (typedKey) payload.llm_api_key = typedKey;
+
     const resp = await api('/api/settings', {
         method: 'POST',
-        body: JSON.stringify({
-            llm_api_key: document.getElementById('llm-key').value.trim(),
-            llm_base_url: document.getElementById('llm-url').value.trim(),
-            llm_model: document.getElementById('llm-model').value.trim(),
-        }),
+        body: JSON.stringify(payload),
     });
     toast(resp.success ? '模型配置已保存' : '保存失败', resp.success ? 'success' : 'error');
 });
@@ -203,30 +223,73 @@ async function checkKnowledge() {
 
 loadSettings();
 
-// 加载插件 API Key
-async function loadApiKey() {
-    const resp = await api('/api/my-api-key');
-    const el = document.getElementById('extension-api-key');
-    const status = document.getElementById('api-key-status');
-    if (resp.success && resp.api_key) {
-        el.value = resp.api_key;
-    } else {
-        el.value = '请先填写上方的 LLM API Key';
-        status.textContent = '保存 LLM API Key 后此处会自动显示';
-        status.style.color = '#b26a00';
-    }
+// ── 扩展访问令牌 ──
+// 明文只在生成时返回一次，所以生成后立刻填入只读输入框供复制；
+// 刷新页面就看不到了，列表里只有 token_hint。
+
+function setTokenStatus(msg, ok) {
+    const status = document.getElementById('api-token-status');
+    status.textContent = msg;
+    status.style.color = ok ? '#1a8a4a' : '#b26a00';
 }
 
-function copyApiKey() {
-    const el = document.getElementById('extension-api-key');
+async function loadTokens() {
+    const resp = await api('/api/tokens');
+    const box = document.getElementById('token-list');
+    if (!resp.success) { box.textContent = '加载失败'; return; }
+
+    const active = (resp.data || []).filter(t => !t.revoked_at);
+    if (!active.length) {
+        box.innerHTML = '<div style="color:#999">还没有令牌，点击「生成」创建一个。</div>';
+        return;
+    }
+    box.innerHTML = active.map(t => `
+        <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid #f0f0f0">
+            <code style="font-size:12px">${t.token_hint}</code>
+            <span style="color:#666">${t.label || '未命名'}</span>
+            <span style="color:#aaa;margin-left:auto">${(t.last_used_at || '从未使用').slice(0, 16)}</span>
+            <button class="btn btn-sm" onclick="revokeToken(${t.id})">撤销</button>
+        </div>`).join('');
+
+    const el = document.getElementById('extension-api-token');
+    el.value = '';
+    el.placeholder = '出于安全考虑，明文不再显示；如需新令牌请重新生成';
+}
+
+async function generateToken() {
+    const resp = await api('/api/tokens', {
+        method: 'POST',
+        body: JSON.stringify({ label: 'Chrome 扩展' }),
+    });
+    if (!resp.success) { setTokenStatus('生成失败', false); return; }
+
+    const el = document.getElementById('extension-api-token');
+    el.value = resp.token;
+    setTokenStatus('令牌已生成，请立即复制保存 —— 离开本页后无法再次查看明文。', true);
+    loadTokens();
+}
+
+function copyToken() {
+    const el = document.getElementById('extension-api-token');
+    if (!el.value) { setTokenStatus('当前没有可复制的明文令牌，请先点「生成」。', false); return; }
     el.select();
     document.execCommand('copy');
-    const status = document.getElementById('api-key-status');
-    status.textContent = '已复制！粘贴到 Chrome 插件设置中即可';
-    status.style.color = '#1a8a4a';
-    setTimeout(() => { status.textContent = ''; }, 3000);
+    setTokenStatus('已复制！粘贴到 Chrome 插件设置的「令牌」输入框中。', true);
 }
 
-loadApiKey();
+async function revokeToken(id) {
+    const resp = await api('/api/tokens/' + id, { method: 'DELETE' });
+    setTokenStatus(resp.success ? '已撤销' : '撤销失败', resp.success);
+    loadTokens();
+}
+
+async function revokeAllTokens() {
+    if (!confirm('确定撤销全部令牌？所有已配置的扩展会立即断开。')) return;
+    const resp = await api('/api/tokens/revoke-all', { method: 'POST' });
+    setTokenStatus(resp.success ? `已撤销 ${resp.revoked} 个令牌` : '操作失败', resp.success);
+    loadTokens();
+}
+
+loadTokens();
 </script>
 {% endblock %}

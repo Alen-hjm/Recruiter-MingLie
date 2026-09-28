@@ -1,10 +1,18 @@
 """
 Agent 工具注册表 - 定义 Agent 可用的所有工具
+
+重构说明：
+  原先 _tool_scrape_resumes / _tool_score_resumes 直接从 server 导入后台任务函数
+  （`from .server import _run_scrape_thread`），导致「工具层 → HTTP 服务」的反向依赖，
+  单独 import 本模块会把整个 Flask 应用连带拉起。现在改为依赖 services 层，
+  依赖方向恢复为单向：agent_tools → services → models/scraper/analyzer。
 """
 import json
-import asyncio
-from pathlib import Path
+import time
 from datetime import datetime
+from pathlib import Path
+
+from . import config
 
 
 # ── 工具定义 ──
@@ -145,21 +153,18 @@ class ToolExecutor:
 
     async def _tool_analyze_jd(self, params: dict) -> dict:
         """分析 JD"""
-        from .models import get_settings
         from .jd_analyzer import analyze_jd
+        from .models import get_settings
 
-        settings = get_settings(self.user_id)
-        api_key = settings.get("llm_api_key", "")
-        base_url = settings.get("llm_base_url", "https://api.deepseek.com")
-        model = settings.get("llm_model", "deepseek-chat")
+        llm = config.resolve_llm_config(get_settings(self.user_id))
 
         result = await analyze_jd(
             job_name=params.get("job_name", ""),
             job_description=params.get("job_description", ""),
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
-            use_llm=bool(api_key),
+            api_key=llm["api_key"],
+            base_url=llm["base_url"],
+            model=llm["model"],
+            use_llm=bool(llm["api_key"]),
         )
         return {"success": True, "data": result}
 
@@ -191,9 +196,8 @@ class ToolExecutor:
 
     async def _tool_scrape_resumes(self, params: dict) -> dict:
         """爬取简历"""
-        from .models import get_job, get_settings, create_scrape_task
-        from .server import _run_scrape_thread
-        import threading
+        from .models import create_scrape_task, get_job, get_settings
+        from .services.scraping import build_scrape_config, start_scrape_task
 
         job_id = params.get("job_id")
         if not job_id:
@@ -205,61 +209,34 @@ class ToolExecutor:
 
         keyword = params.get("keyword") or job.get("keyword", "")
         city = params.get("city", "") or ""
-        max_pages = min(int(params.get("max_pages", 3)), 5)
+        max_pages = min(int(params.get("max_pages", 3)), config.SCRAPE_MAX_PAGES_LIMIT)
 
-        settings = get_settings(self.user_id)
-
-        # 从 JD 分析结果中提取快速筛选规则（学历/年限/年龄）
+        # 从 JD 中提取快速筛选规则（学历/年限/年龄）
         quick_filter = {}
-        job = get_job(int(job_id))
-        if job:
-            try:
-                from .jd_analyzer import extract_filter_rules_from_jd
-                quick_filter = extract_filter_rules_from_jd({}, job.get("job_description", ""))
-                if quick_filter:
-                    print(f"[快速筛选] 从 JD 提取规则: {quick_filter}")
-            except Exception:
-                pass
+        try:
+            from .jd_analyzer import extract_filter_rules_from_jd
+            quick_filter = extract_filter_rules_from_jd({}, job.get("job_description", ""))
+            if quick_filter:
+                print("[快速筛选] 从 JD 提取规则: %s" % quick_filter)
+        except Exception:
+            pass
 
-        config = {
-            "platform": "liepin",
-            "llm": {
-                "api_key": settings.get("llm_api_key", ""),
-                "base_url": settings.get("llm_base_url", "https://api.deepseek.com"),
-                "model": settings.get("llm_model", "deepseek-chat"),
-            },
-            "scraper": {
-                "launch_mode": "cdp",  # cdp=连接已启动的Chrome(推荐), stealth=反检测插件
-                "cdp_port": 9222,      # Chrome 调试端口
-                "headless": False,
-                "slow_mo": 800,
-                "timeout": 30000,
-                "search_mode": "auto",
-                "user_data_dir": f"./browser_data/user_{self.user_id}",
-            },
-            "search": {
-                "keyword": keyword,
-                "city": city,
-                "max_pages": max_pages,
-            },
-            "quick_filter": quick_filter,
-        }
-
-        task_id = create_scrape_task(self.user_id, keyword, city, "liepin", max_pages, job_id=int(job_id))
-
-        # 后台线程运行
-        thread = threading.Thread(
-            target=_run_scrape_thread,
-            args=(task_id, config, keyword, city, "liepin", max_pages, self.user_id, int(job_id)),
-            daemon=True,
+        scrape_config = build_scrape_config(
+            get_settings(self.user_id), keyword, city, max_pages,
+            search_mode="auto", user_id=self.user_id,
         )
-        thread.start()
+        if quick_filter:
+            scrape_config["quick_filter"] = quick_filter
 
-        # 等待完成（轮询）
-        import time
-        for _ in range(120):  # 最多等 2 分钟
+        task_id = create_scrape_task(
+            self.user_id, keyword, city, "liepin", max_pages, job_id=int(job_id)
+        )
+        start_scrape_task(task_id, scrape_config, user_id=self.user_id, job_id=int(job_id))
+
+        # 轮询等待完成（最多 2 分钟）
+        from .models import get_scrape_task
+        for _ in range(120):
             time.sleep(1)
-            from .models import get_scrape_task
             task = get_scrape_task(task_id)
             if task and task["status"] in ("done", "error"):
                 return {
@@ -273,9 +250,8 @@ class ToolExecutor:
 
     async def _tool_score_resumes(self, params: dict) -> dict:
         """评分简历"""
-        from .models import get_job, get_settings, get_unscored_resumes, create_score_task
-        from .server import _run_score_thread
-        import threading
+        from .models import get_job, get_score_task, get_unscored_resumes, get_settings
+        from .services.scoring import start_score_task
 
         job_id = params.get("job_id")
         if not job_id:
@@ -291,40 +267,21 @@ class ToolExecutor:
 
         resumes, already_scored = get_unscored_resumes(self.user_id, int(job_id))
         if not resumes:
-            return {"success": True, "message": f"无新简历需要评分（已有 {already_scored} 份已评分）"}
+            return {"success": True, "message": "无新简历需要评分（已有 %s 份已评分）" % already_scored}
 
-        settings = get_settings(self.user_id)
-        api_key = settings.get("llm_api_key", "")
-        if not api_key:
+        if not config.resolve_llm_config(get_settings(self.user_id))["api_key"]:
             return {"success": False, "error": "未配置 LLM API Key"}
 
-        config = {
-            "llm": {
-                "api_key": api_key,
-                "base_url": settings.get("llm_base_url", "https://api.deepseek.com"),
-                "model": settings.get("llm_model", "deepseek-chat"),
-            },
-            "job_description": job_description,
-            "job_name": job["name"],
-        }
-
-        task_id = create_score_task(self.user_id, None, job["name"], job_description, "100")
-
-        thread = threading.Thread(
-            target=_run_score_thread,
-            args=(task_id, config, resumes, job_description, "100", self.user_id, int(job_id)),
-            daemon=True,
+        task_id, _ = start_score_task(
+            self.user_id, int(job_id), job["name"], job_description, resumes, "100"
         )
-        thread.start()
 
-        # 等待完成
-        import time
-        for _ in range(300):  # 最多等 5 分钟
+        # 轮询等待完成（最多 5 分钟）
+        for _ in range(300):
             time.sleep(1)
-            from .models import get_score_task
             task = get_score_task(task_id)
             if task and task["status"] in ("done", "error"):
-                scored = json.loads(task.get("scored_json", "[]")) if task.get("scored_json") else []
+                scored = json.loads(task.get("scored_json") or "[]")
                 return {
                     "success": task["status"] == "done",
                     "task_id": task_id,
@@ -540,13 +497,13 @@ class ToolExecutor:
         # 同步管道到 Obsidian
         print(f"[一键招聘] 同步管道到 Obsidian")
         try:
-            from .models import get_candidates_by_stage, get_pipeline_summary
+            from .models import get_candidates_by_stage, get_pipeline_summary, get_settings
             stages = get_candidates_by_stage(self.user_id, job_id)
-            summary = get_pipeline_summary(self.user_id, job_id)
-            job_folder = settings.get("obsidian_job_path", "")
+            summary_data = get_pipeline_summary(self.user_id, job_id)
+            job_folder = (get_settings(self.user_id) or {}).get("obsidian_job_path", "")
             if job_folder:
                 from .knowledge import sync_pipeline_to_obsidian
-                sync_pipeline_to_obsidian(job_folder, job_name, stages, summary)
+                sync_pipeline_to_obsidian(job_folder, job_name, stages, summary_data)
                 results["obsidian_pipeline"] = {"success": True}
         except Exception as e:
             print(f"[一键招聘] 管道同步失败: {e}")
@@ -556,7 +513,7 @@ class ToolExecutor:
         pending = candidates_result.get("pending_count", 0)
         rejected = candidates_result.get("rejected_count", 0)
 
-        summary = f"✅ 招聘完成！\n"
+        summary = "✅ 招聘完成！\n"
         summary += f"📋 岗位：{job_name}（ID:{job_id}）\n"
         summary += f"📄 爬取简历：{resume_count}份\n"
         summary += f"🟢 推荐面试（≥80分）：{recommended}人\n"

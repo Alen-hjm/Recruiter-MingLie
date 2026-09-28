@@ -10,7 +10,8 @@
  */
 
 let API_BASE = "http://127.0.0.1:5000";
-let API_KEY = "";
+let API_TOKEN = "";   // 扩展访问令牌（推荐），与 LLM Key 无关
+let API_KEY = "";     // 兼容旧配置：LLM Key 当凭据（后端可在兼容期内接受）
 let state = { running: false, jobId: null, jobName: "", allResumes: [], stats: {}, currentPage: 0, aiContext: null, pendingCandidate: null };
 
 // ══════════════════════════════════════════
@@ -136,6 +137,11 @@ async function initAsync() {
   try {
     // 加载存储数据
     const stored = await chrome.storage.local.get(["apiKey", "serverUrl", "collectedResumes", "collectedJobId"]);
+    if (stored.apiToken) {
+      API_TOKEN = stored.apiToken;
+      const inputToken = document.getElementById("inputApiToken");
+      if (inputToken) inputToken.value = stored.apiToken;
+    }
     if (stored.apiKey) {
       API_KEY = stored.apiKey;
       const inputApiKey = document.getElementById("inputApiKey");
@@ -173,6 +179,15 @@ async function initAsync() {
 
     // 监听 storage 变化
     chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === "local" && changes.apiToken) {
+        const newToken = changes.apiToken.newValue || "";
+        if (newToken && newToken !== API_TOKEN) {
+          API_TOKEN = newToken;
+          const inputToken = document.getElementById("inputApiToken");
+          if (inputToken) inputToken.value = newToken;
+          checkServer().then(ok => { if (ok) { loadJobs(); } });
+        }
+      }
       if (area === "local" && changes.apiKey) {
         const newKey = changes.apiKey.newValue || "";
         if (newKey && newKey !== API_KEY) {
@@ -212,17 +227,24 @@ function switchToPanel(name) {
 
 function apiFetch(url, options = {}) {
   const headers = { ...options.headers };
-  if (API_KEY) headers["X-API-Key"] = API_KEY;
+  // 优先用访问令牌；没有令牌时才回落到旧的 LLM Key 凭据
+  if (API_TOKEN) headers["X-API-Token"] = API_TOKEN;
+  else if (API_KEY) headers["X-API-Key"] = API_KEY;
   return fetch(url, { ...options, headers }).catch(e => {
     throw new Error(`网络请求失败: ${e.message}`);
   });
 }
 
 function ensureApiKey() {
-  if (API_KEY) return true;
-  const inputEl = document.getElementById("inputApiKey");
+  if (API_TOKEN || API_KEY) return true;
+  const inputEl = document.getElementById("inputApiToken");
   if (inputEl && inputEl.value.trim()) {
-    API_KEY = inputEl.value.trim();
+    API_TOKEN = inputEl.value.trim();
+    return true;
+  }
+  const inputEl2 = document.getElementById("inputApiKey");
+  if (inputEl2 && inputEl2.value.trim()) {
+    API_KEY = inputEl2.value.trim();
     return true;
   }
   return false;
@@ -844,20 +866,24 @@ function cssEsc(s) { return (s || "").replace(/"/g, '\\"'); }
 // ══════════════════════════════════════════
 
 function saveSettings() {
+  const tokenEl = document.getElementById("inputApiToken");
+  const token = tokenEl ? tokenEl.value.trim() : "";
   const key = document.getElementById("inputApiKey").value.trim();
   const server = document.getElementById("inputServer").value.trim();
   const dsKey = document.getElementById("inputDsKey").value.trim();
   const dsModel = document.getElementById("inputDsModel").value.trim() || "deepseek-chat";
-  if (!key && !dsKey) {
+  if (!token && !key && !dsKey) {
     document.getElementById("settingsMsg").innerHTML = '<span style="color:#ff4d4f">请至少填写一个 Key（后端或 DeepSeek）</span>';
     return;
   }
+  API_TOKEN = token;
   API_KEY = key;
   if (server) API_BASE = server;
   chrome.storage.local.set(
-    { apiKey: key, serverUrl: server || API_BASE, dsApiKey: dsKey, dsModel },
+    { apiToken: token, apiKey: key, serverUrl: server || API_BASE, dsApiKey: dsKey, dsModel },
     () => {
       console.log("[明猎] 已保存到 storage:", {
+        apiToken: token ? token.substring(0, 6) + "***" : "(空)",
         apiKey: key ? key.substring(0, 6) + "***" : "(空)",
         serverUrl: server || API_BASE,
         dsApiKey: dsKey ? dsKey.substring(0, 6) + "***" : "(空)",
@@ -865,8 +891,8 @@ function saveSettings() {
       document.getElementById("settingsMsg").innerHTML = '<span style="color:#52c41a">已保存 ✓</span>';
     }
   );
-  // 仅当填了后端 Key 才去探测后端
-  if (key) {
+  // 填了令牌或后端 Key 就去探测后端
+  if (token || key) {
     checkServer().then(ok => {
       if (ok) loadJobs();
     });

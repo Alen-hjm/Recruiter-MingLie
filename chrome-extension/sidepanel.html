@@ -276,10 +276,15 @@ body { font-family:"PingFang SC","Microsoft YaHei",sans-serif; background:#edf0f
   <!-- 设置面板 -->
   <section class="panel" id="panel-settings">
     <div class="panel-title">设置</div>
+    <div class="config-row">
+      <label>令牌</label>
+      <input type="password" id="inputApiToken" placeholder="ml_...（网页端「设置」页生成）">
+    </div>
+    <div style="margin:8px 0 6px;font-size:11px;color:#929bae">令牌与 LLM Key 相互独立：令牌用于访问本机后端，LLM Key 只用于调用大模型。</div>
     <div id="settingsStatus" style="margin-bottom:12px;padding:8px 12px;border-radius:8px;font-size:12px;display:none"></div>
     <div class="config-row">
       <label>Key</label>
-      <input type="password" id="inputApiKey" placeholder="LLM API Key">
+      <input type="password" id="inputApiKey" placeholder="LLM API Key（仅直连评分用）">
     </div>
     <div class="config-row">
       <label>服务器</label>

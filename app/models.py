@@ -1,5 +1,10 @@
 """
 数据库模型 - SQLite
+
+重构说明：DB_PATH 原先写死为 Path("data/minglie.db")，即依赖「进程当前工作目录」。
+从别处调用（比如 pytest 从一个子目录启动、或 systemd 里 WorkingDirectory 没设对）
+就会在意外位置新建一个空库，症状是「数据明明存过却查不到」。
+现在统一从 app.config 取，并且 config 内部用 BASE_DIR 做锚点。
 """
 import sqlite3
 import json
@@ -8,7 +13,9 @@ from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 from werkzeug.security import generate_password_hash, check_password_hash
 
-DB_PATH = Path("data/minglie.db")
+from . import config
+
+DB_PATH = config.DB_PATH
 
 
 def _safe_add_column(conn, table: str, column: str, col_type: str):
@@ -22,7 +29,7 @@ def _safe_add_column(conn, table: str, column: str, col_type: str):
 
 def get_db():
     """获取数据库连接"""
-    DB_PATH.parent.mkdir(exist_ok=True)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
