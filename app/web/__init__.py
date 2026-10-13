@@ -83,6 +83,8 @@ def init_all() -> None:
     config.ensure_dirs()
     init_db()
     init_auth_db()
+    from ..services.scraping import recover_interrupted_tasks
+    recover_interrupted_tasks()
     try:
         from ..knowledge_engine import init_knowledge_db
         init_knowledge_db()

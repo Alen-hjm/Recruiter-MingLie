@@ -1,240 +1,66 @@
 {% extends "base.html" %}
 {% set active = "agent" %}
-{% block title %}AI 招聘助手 - 明猎{% endblock %}
-
+{% block title %}明猎 · 一句话，开始招聘{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/css/assistant.css">{% endblock %}
 {% block content %}
-<div class="topbar">
-    <div class="topbar-left">
-        <h1>🤖 AI 招聘助手</h1>
-        <p>告诉我你的招聘目标，我来帮你完成</p>
+{% macro glyph(kind) -%}
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{% if kind == 'understanding' %}<path d="M5 4h14v12H9l-4 4V4Z"/><path d="M9 8h6M9 12h4"/>{% elif kind == 'searching' %}<circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5 5M8 10.5h5M10.5 8v5"/>{% elif kind == 'evaluating' %}<path d="M5 20V10M12 20V4M19 20v-7M3 20h18"/>{% elif kind == 'recommending' %}<path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.8 1-6.1-4.4-4.3 6.1-.9L12 3Z"/>{% elif kind == 'model' %}<rect x="6" y="6" width="12" height="12" rx="3"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/><path d="m10 10 4 4m0-4-4 4"/>{% else %}<rect x="3" y="4" width="18" height="15" rx="3"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01m0 7 2 2 4-4"/>{% endif %}</svg>
+{%- endmacro %}
+<section class="assistant-space" id="assistant-space">
+  <div class="assistant-toolbar"><div class="assistant-presence"><span class="presence-light"></span>你的招聘搭档</div><button class="btn btn-default btn-sm" id="clear-chat">新对话 ↗</button></div>
+  {% if config.UI_PREVIEW %}<div class="preview-label">演示空间 · 使用虚构简历与本地模拟助手</div>{% endif %}
+  <div class="assistant-grid">
+    <section class="assistant-stage" aria-label="招聘对话">
+      <div class="assistant-landing" id="assistant-landing" data-spotlight>
+        <div class="aurora-wash" aria-hidden="true"></div>
+        <div class="landing-copy"><div class="assistant-kicker"><span></span> 明猎 · 招聘助手</div>
+          <h1><span>你说需求。</span><br><span>明猎，<em>去找对的人。</em></span></h1>
+          <p>一句话，从招聘需求到推荐人选。</p>
+        </div>
+        <div class="talent-bridge" aria-hidden="true">
+          <svg class="bridge-lines" viewBox="0 0 420 300"><defs><linearGradient id="beam-ink"><stop stop-color="#8aa6ef"/><stop offset=".5" stop-color="#ad79dc"/><stop offset="1" stop-color="#eead8e"/></linearGradient></defs><path class="bridge-base" d="M62 82C165 82 125 150 215 150S286 48 352 48M62 220C146 220 130 150 215 150S280 160 360 160M215 150C270 150 290 260 351 260"/><path class="bridge-beam" d="M62 82C165 82 125 150 215 150S286 48 352 48M62 220C146 220 130 150 215 150S280 160 360 160M215 150C270 150 290 260 351 260"/></svg>
+          <div class="bridge-note note-demand"><i>⌕</i><span>你的招聘需求</span><b>从一句话开始</b></div>
+          <div class="bridge-core"><span class="core-orbit"></span><span class="core-orbit second"></span><span class="core-face">✧</span><small>明猎</small></div>
+          <div class="bridge-note note-profile"><span class="abstract-avatar"></span><span>发现人才</span><div class="abstract-lines"></div></div>
+          <div class="bridge-note note-match"><i>↗</i><span>找到契合的经历</span></div>
+          <div class="bridge-note note-result"><i>✓</i><span>推荐有据可循</span></div>
+        </div>
+      </div>
+      <div id="conversation-feed" class="conversation-feed" role="log" aria-live="polite" aria-label="对话记录" hidden></div>
+      <div class="assistant-composer-wrap">
+        <form id="assistant-form" class="assistant-composer">
+          <label for="chat-input" class="composer-label">这次，你想招谁？</label>
+          <textarea id="chat-input" rows="2" maxlength="12000" placeholder="帮我找深圳的半导体销售总监，先收集 10 份简历，无其他要求。" aria-describedby="composer-hint"></textarea>
+          <div class="composer-bottom"><span id="composer-hint"><span class="composer-spark">✧</span> 支持粘贴 JD</span><button type="submit" class="assistant-send" id="btn-send"><span>交给明猎</span><span class="send-arrow">↗</span></button></div>
+        </form>
+        <div class="assistant-examples" id="assistant-examples"><span>试着说</span><button type="button" data-prompt="帮我找深圳的半导体销售总监，先收集10份简历，无其他要求。">找深圳半导体销售总监 <span>↗</span></button><button type="button" data-prompt="看看当前招聘项目的进度，哪些候选人值得先联系？">看看招聘进度 <span>↗</span></button><button type="button" data-prompt="我有一份JD，请帮我梳理招聘条件：">从一份 JD 开始 <span>↗</span></button></div>
+        <div class="composer-footnote"><div id="connection-label">读取状态…</div><details class="quiet-help"><summary>输入提示 <span>?</span></summary><p>写清岗位、城市和目标份数，或粘贴 JD。<br>Enter 发送 · Shift + Enter 换行</p></details></div>
+      </div>
+    </section>
+    <aside class="mission-panel" aria-label="本轮招聘进展">
+      <div class="mission-heading"><span class="assistant-kicker">本轮招聘</span><span class="mission-live" id="mission-live">待开始</span></div>
+      <h2 id="mission-title">从需求，到人选。</h2><p id="mission-goal" hidden></p>
+      <ol class="mission-steps" id="mission-steps">
+        <li data-phase="understanding"><span class="mission-node">{{ glyph('understanding') }}</span><strong>理解需求</strong><span class="phase-order">01</span></li>
+        <li data-phase="searching"><span class="mission-node">{{ glyph('searching') }}</span><strong>搜寻人才</strong><span class="phase-order">02</span></li>
+        <li data-phase="evaluating"><span class="mission-node">{{ glyph('evaluating') }}</span><strong>分析匹配</strong><span class="phase-order">03</span></li>
+        <li data-phase="recommending"><span class="mission-node">{{ glyph('recommending') }}</span><strong>交付推荐</strong><span class="phase-order">04</span></li>
+      </ol>
+      <div class="mission-message" id="mission-message" hidden><span>✧</span><p></p></div>
+      <div class="mission-counts" id="mission-counts" hidden></div>
+      <div class="mission-links" id="mission-links" hidden></div>
+      <details class="route-help"><summary>助手怎么推进？ <span>＋</span></summary><ol><li>提取岗位、城市与招聘条件。</li><li>收集并保存符合搜索条件的简历。</li><li>分析经历，整理推荐依据。</li></ol><p>需要登录或验证时会提示你。推荐供沟通参考。</p></details>
+    </aside>
+  </div>
+  <section class="start-kit" aria-labelledby="start-kit-title">
+    <div class="start-kit-heading"><h2 id="start-kit-title">开始前</h2><button class="btn btn-default btn-sm" type="button" data-open-onboarding>新手指南 ↗</button></div>
+    <div class="start-kit-grid">
+      <div class="start-kit-step"><span class="start-kit-number">{{ glyph('model') }}</span><h3>分析模型 <span class="setup-readiness" data-model-readiness>读取中…</span></h3><a href="/settings#model">模型设置 ↗</a><details class="setup-help"><summary>接入说明</summary><p>选择服务商、填写密钥并保存。配置后，连接情况以实际执行为准。</p></details></div>
+      <div class="start-kit-step"><span class="start-kit-number">{{ glyph('browser') }}</span><h3>猎聘登录 <span class="setup-caption">搜寻时提示</span></h3><a href="/scrape">搜寻任务 ↗</a><details class="setup-help"><summary>登录说明</summary><p>首次搜寻时，在采集浏览器中登录猎聘；需要验证时按提示处理。</p></details></div>
+      <div class="start-kit-step"><span class="start-kit-number">{{ glyph('understanding') }}</span><h3>招聘需求</h3><button type="button" data-prompt="帮我找深圳的半导体销售总监，先收集10份简历，无其他要求。">试用示例 ↗</button><details class="setup-help"><summary>怎么描述</summary><p>写清岗位、城市与目标份数，或直接贴 JD。点击示例只填入需求，不会开始搜寻。</p></details></div>
     </div>
-    <button class="btn btn-default btn-sm" onclick="clearChat()">清空对话</button>
-</div>
-
-<!-- 对话区域 -->
-<div id="chat-container" style="height:calc(100vh - 200px);overflow-y:auto;padding:16px;background:#f8f9fa;border-radius:12px;margin-bottom:16px">
-    <!-- 欢迎消息 -->
-    <div class="chat-msg assistant">
-        <div class="chat-avatar">🤖</div>
-        <div class="chat-bubble">
-            <div style="font-weight:600;margin-bottom:8px">你好！我是明猎 AI 招聘助手</div>
-            <div>我可以帮你：</div>
-            <ul style="margin:8px 0;padding-left:20px;font-size:13px;color:#666">
-                <li>分析岗位 JD，提取关键词</li>
-                <li>自动爬取简历</li>
-                <li>AI 评分并筛选候选人</li>
-                <li>推荐最匹配的候选人</li>
-            </ul>
-            <div style="margin-top:12px;font-size:13px;color:#999">试试说：帮我招一个质量总监，上海，要求10年以上经验</div>
-        </div>
-    </div>
-</div>
-
-<!-- 输入区域 -->
-<div style="display:flex;gap:8px">
-    <input type="text" id="chat-input" class="form-input" placeholder="输入你的招聘目标..." 
-           style="flex:1" onkeydown="if(event.key==='Enter')sendMessage()">
-    <button class="btn btn-primary" onclick="sendMessage()" id="btn-send">发送</button>
-</div>
+  </section>
+  <section class="assistant-continuity"><div class="continuity-heading"><h2>继续招聘</h2><a href="/overview">全部项目 ↗</a></div><div id="recent-missions" class="recent-missions"><p>读取项目…</p></div></section>
+</section>
 {% endblock %}
-
-{% block scripts %}
-<script>
-const chatContainer = document.getElementById('chat-container');
-const chatInput = document.getElementById('chat-input');
-const btnSend = document.getElementById('btn-send');
-
-// 添加消息到界面
-function addMessage(role, content, details = null) {
-    const msgDiv = document.createElement('div');
-    msgDiv.className = `chat-msg ${role}`;
-    
-    const avatar = role === 'user' ? '👤' : '🤖';
-    const bubbleClass = role === 'user' ? 'chat-bubble-user' : 'chat-bubble';
-    
-    let detailHtml = '';
-    if (details) {
-        if (details.steps && details.steps.length > 0) {
-            detailHtml = '<div style="margin-top:12px;padding-top:12px;border-top:1px solid #eee">';
-            detailHtml += '<div style="font-size:12px;color:#999;margin-bottom:8px">执行步骤：</div>';
-            details.steps.forEach((step, i) => {
-                const status = step.result?.success ? '✅' : '❌';
-                detailHtml += `<div style="font-size:12px;margin-bottom:4px">${status} ${step.description || step.tool}</div>`;
-            });
-            detailHtml += '</div>';
-        }
-    }
-    
-    msgDiv.innerHTML = `
-        <div class="chat-avatar">${avatar}</div>
-        <div class="${bubbleClass}">
-            <div style="white-space:pre-wrap">${content}</div>
-            ${detailHtml}
-        </div>
-    `;
-    
-    chatContainer.appendChild(msgDiv);
-    chatContainer.scrollTop = chatContainer.scrollHeight;
-}
-
-// 添加加载动画
-function addLoading() {
-    const msgDiv = document.createElement('div');
-    msgDiv.className = 'chat-msg assistant';
-    msgDiv.id = 'loading-msg';
-    msgDiv.innerHTML = `
-        <div class="chat-avatar">🤖</div>
-        <div class="chat-bubble">
-            <div class="loading-dots">
-                <span></span><span></span><span></span>
-            </div>
-            <div style="font-size:12px;color:#999;margin-top:8px">正在思考和执行...</div>
-        </div>
-    `;
-    chatContainer.appendChild(msgDiv);
-    chatContainer.scrollTop = chatContainer.scrollHeight;
-}
-
-function removeLoading() {
-    const loading = document.getElementById('loading-msg');
-    if (loading) loading.remove();
-}
-
-// 发送消息
-async function sendMessage() {
-    const message = chatInput.value.trim();
-    if (!message) return;
-    
-    chatInput.value = '';
-    addMessage('user', message);
-    addLoading();
-    
-    btnSend.disabled = true;
-    btnSend.textContent = '执行中...';
-    
-    try {
-        const resp = await api('/api/chat', {
-            method: 'POST',
-            body: JSON.stringify({ message }),
-        });
-        
-        removeLoading();
-        
-        if (resp.success) {
-            addMessage('assistant', resp.reply, {
-                steps: resp.results || [],
-            });
-        } else {
-            addMessage('assistant', `❌ 出错了：${resp.error}`);
-        }
-    } catch (e) {
-        removeLoading();
-        addMessage('assistant', `❌ 请求失败：${e.message}`);
-    } finally {
-        btnSend.disabled = false;
-        btnSend.textContent = '发送';
-    }
-}
-
-// 清空对话
-async function clearChat() {
-    if (!confirm('确定清空对话历史？')) return;
-    await api('/api/chat/clear', { method: 'POST' });
-    chatContainer.innerHTML = `
-        <div class="chat-msg assistant">
-            <div class="chat-avatar">🤖</div>
-            <div class="chat-bubble">
-                <div style="font-weight:600;margin-bottom:8px">对话已清空</div>
-                <div>请输入你的招聘目标，我来帮你完成。</div>
-            </div>
-        </div>
-    `;
-}
-
-// 样式
-const style = document.createElement('style');
-style.textContent = `
-.chat-msg {
-    display: flex;
-    gap: 12px;
-    margin-bottom: 16px;
-    align-items: flex-start;
-}
-.chat-msg.user {
-    flex-direction: row-reverse;
-}
-.chat-avatar {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: #f0f0f0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    flex-shrink: 0;
-}
-.chat-bubble {
-    background: white;
-    padding: 12px 16px;
-    border-radius: 12px;
-    max-width: 70%;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    font-size: 14px;
-    line-height: 1.6;
-}
-.chat-bubble-user {
-    background: var(--primary, #4f46e5);
-    color: white;
-    padding: 12px 16px;
-    border-radius: 12px;
-    max-width: 70%;
-    font-size: 14px;
-    line-height: 1.6;
-}
-.loading-dots {
-    display: flex;
-    gap: 4px;
-}
-.loading-dots span {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #999;
-    animation: bounce 1.4s infinite ease-in-out;
-}
-.loading-dots span:nth-child(1) { animation-delay: -0.32s; }
-.loading-dots span:nth-child(2) { animation-delay: -0.16s; }
-@keyframes bounce {
-    0%, 80%, 100% { transform: scale(0); }
-    40% { transform: scale(1); }
-}
-`;
-document.head.appendChild(style);
-
-chatInput.focus();
-
-// 页面加载时恢复对话历史
-async function loadHistory() {
-    try {
-        const resp = await api('/api/chat/history');
-        if (resp.success && resp.data && resp.data.length > 0) {
-            // 清空欢迎消息
-            chatContainer.innerHTML = '';
-            // 渲染历史消息
-            resp.data.forEach(msg => {
-                if (msg.role === 'user') {
-                    addMessage('user', msg.content);
-                } else if (msg.role === 'assistant') {
-                    addMessage('assistant', msg.content);
-                }
-            });
-        }
-    } catch (e) {
-        console.log('加载历史失败', e);
-    }
-}
-
-loadHistory();
-</script>
-{% endblock %}
+{% block scripts %}<script src="/static/js/assistant.js" defer></script>{% endblock %}

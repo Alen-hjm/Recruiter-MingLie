@@ -164,10 +164,19 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_jobs_user ON jobs(user_id);
         CREATE INDEX IF NOT EXISTS idx_strategies_job ON search_strategies(job_id);
         CREATE INDEX IF NOT EXISTS idx_strategies_user ON search_strategies(user_id);
+
+        CREATE TABLE IF NOT EXISTS user_onboarding (
+            user_id INTEGER PRIMARY KEY,
+            status TEXT NOT NULL DEFAULT 'new',
+            step INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
     """)
     conn.commit()
 
     # ── 迁移：给旧表加新字段（安全，已存在则跳过）──
+    _safe_add_column(conn, "scrape_tasks", "run_config_json", "TEXT")
+    _safe_add_column(conn, "scrape_tasks", "score_task_id", "INTEGER")
     _safe_add_column(conn, "interview_feedback", "pipeline_stage", "TEXT DEFAULT 'recommended'")
     _safe_add_column(conn, "interview_feedback", "reject_stage", "TEXT")
     _safe_add_column(conn, "interview_feedback", "company_rejected", "TEXT")
@@ -240,72 +249,11 @@ def create_user(username: str, password: str, display_name: str = "") -> User:
         conn.commit()
         uid = user["id"]
 
-        # ── P0-2: 新用户自动创建示例岗位 + 搜索策略 ──
-        _seed_sample_data(conn, uid)
+        # 新账号由开始指南引导创建真实项目，不注入无关示例岗位。
 
         return User(uid, user["username"], user["display_name"])
     finally:
         conn.close()
-
-
-def _seed_sample_data(conn, user_id: int):
-    """为新用户创建示例岗位和搜索策略，降低上手门槛"""
-    samples = [
-        {
-            "name": "Python 后端开发",
-            "keyword": "Python",
-            "jd": """岗位职责：
-1. 负责公司核心业务系统的后端开发和维护
-2. 参与系统架构设计，保证系统高可用、高性能
-3. 编写高质量代码，参与代码评审
-4. 与前端、产品团队紧密配合，推进项目落地
-
-任职要求：
-1. 本科及以上学历，计算机相关专业
-2. 3年以上 Python 开发经验
-3. 熟悉 Django/Flask/FastAPI 等框架
-4. 熟悉 MySQL、Redis、消息队列等中间件
-5. 有微服务架构经验优先
-""",
-            "strategies": [
-                {"name": "猎聘-Python", "keyword": "Python开发", "city": "上海"},
-                {"name": "猎聘-后端", "keyword": "后端工程师", "city": "上海"},
-            ],
-        },
-        {
-            "name": "前端工程师",
-            "keyword": "前端",
-            "jd": """岗位职责：
-1. 负责公司 Web 产品的前端开发
-2. 优化前端性能，提升用户体验
-3. 参与前端技术选型和架构设计
-
-任职要求：
-1. 本科及以上学历
-2. 3年以上前端开发经验
-3. 精通 Vue/React 框架
-4. 熟悉 TypeScript、Webpack/Vite
-5. 有移动端 H5 开发经验优先
-""",
-            "strategies": [
-                {"name": "猎聘-前端", "keyword": "前端开发", "city": "上海"},
-            ],
-        },
-    ]
-
-    for job_data in samples:
-        cursor = conn.execute(
-            "INSERT INTO jobs (user_id, name, keyword, job_description) VALUES (?, ?, ?, ?)",
-            (user_id, job_data["name"], job_data["keyword"], job_data["jd"]),
-        )
-        job_id = cursor.lastrowid
-        for i, s in enumerate(job_data["strategies"]):
-            conn.execute(
-                """INSERT INTO search_strategies (job_id, user_id, name, keyword, city, platform, max_pages, is_default)
-                   VALUES (?, ?, ?, ?, ?, 'liepin', 3, ?)""",
-                (job_id, user_id, s["name"], s["keyword"], s.get("city", "上海"), 1 if i == 0 else 0),
-            )
-    conn.commit()
 
 
 def authenticate_user(username: str, password: str) -> User | None:
@@ -424,7 +372,7 @@ def get_existing_resume_ids(user_id: int, job_id: int) -> set:
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT resumes_json FROM scrape_tasks WHERE user_id = ? AND job_id = ? AND status = 'done' AND resumes_json IS NOT NULL",
+            "SELECT resumes_json FROM scrape_tasks WHERE user_id = ? AND job_id = ? AND resumes_json IS NOT NULL",
             (user_id, job_id),
         ).fetchall()
         ids = set()
@@ -674,6 +622,30 @@ def get_default_strategy(user_id: int, job_id: int) -> dict | None:
 
 # ── 设置 ──
 
+def get_onboarding(user_id: int) -> dict:
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT status, step FROM user_onboarding WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return dict(row) if row else {"status": "new", "step": 0}
+    finally:
+        conn.close()
+
+
+def update_onboarding(user_id: int, status: str, step: int):
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO user_onboarding (user_id, status, step) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET status=excluded.status, step=excluded.step",
+            (user_id, status, step),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def get_settings(user_id: int) -> dict:
     conn = get_db()
     try:
@@ -709,7 +681,7 @@ def edit_resume(user_id: int, job_id: int, resume_key: str, updates: dict) -> bo
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT id, resumes_json FROM scrape_tasks WHERE user_id = ? AND job_id = ? AND status = 'done' AND resumes_json IS NOT NULL",
+            "SELECT id, resumes_json FROM scrape_tasks WHERE user_id = ? AND job_id = ? AND resumes_json IS NOT NULL",
             (user_id, job_id),
         ).fetchall()
         for row in rows:
@@ -738,7 +710,7 @@ def delete_resume(user_id: int, job_id: int, resume_key: str) -> bool:
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT id, resumes_json, result_count FROM scrape_tasks WHERE user_id = ? AND job_id = ? AND status = 'done' AND resumes_json IS NOT NULL",
+            "SELECT id, resumes_json, result_count FROM scrape_tasks WHERE user_id = ? AND job_id = ? AND resumes_json IS NOT NULL",
             (user_id, job_id),
         ).fetchall()
         deleted = False
@@ -762,7 +734,7 @@ def delete_low_score_resumes(user_id: int, job_id: int, threshold: int = 60) -> 
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT id, resumes_json, result_count FROM scrape_tasks WHERE user_id = ? AND job_id = ? AND status = 'done' AND resumes_json IS NOT NULL",
+            "SELECT id, resumes_json, result_count FROM scrape_tasks WHERE user_id = ? AND job_id = ? AND resumes_json IS NOT NULL",
             (user_id, job_id),
         ).fetchall()
         total_deleted = 0
@@ -797,7 +769,7 @@ def get_resumes_by_job(user_id: int, job_id: int) -> list:
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT * FROM scrape_tasks WHERE user_id = ? AND job_id = ? AND status = 'done' AND resumes_json IS NOT NULL ORDER BY created_at DESC",
+            "SELECT * FROM scrape_tasks WHERE user_id = ? AND job_id = ? AND resumes_json IS NOT NULL ORDER BY created_at DESC",
             (user_id, job_id),
         ).fetchall()
         all_resumes = []

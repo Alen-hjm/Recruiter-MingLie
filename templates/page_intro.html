@@ -1,0 +1,12 @@
+{% set intros = {
+'jobs': ('01 / PROJECTS','每一次寻找，都从清晰的目标开始。','把岗位要求、人才积累和招聘进展放在同一个项目里。'),
+'score': ('03 / MATCHING','让每一段经历，都有匹配的依据。','结合岗位要求查看优势与待核实项，为下一次沟通做好准备。'),
+'candidates': ('04 / TALENT','从一份简历，走向一次有价值的对话。','按岗位组织候选人，记录你的判断与下一步。'),
+'interview': ('05 / CONVERSATIONS','把好的对话，变成明确的下一步。','集中跟进面试与反馈，让每位候选人的进展清楚可见。'),
+'report': ('06 / INSIGHTS','看到分数，更看到分数背后的经历。','汇总匹配依据与待确认问题，为招聘沟通提供参考。'),
+'logs': ('ACTIVITY / TIMELINE','每一步进展，都有迹可循。','查看搜寻与分析任务，及时接续需要你处理的环节。'),
+'settings': ('PREFERENCES / CONNECTIONS','让明猎，适应你的工作方式。','管理模型服务、招聘偏好与外部连接。')
+} %}
+{% if active in intros %}{% set intro=intros[active] %}
+<section class="page-intro intro-{{ active }}" data-spotlight><div class="intro-copy"><div class="eyebrow">{{ intro[0] }}</div><h2>{{ intro[1] }}</h2><p>{{ intro[2] }}</p></div><div class="intro-glyph" aria-hidden="true"><span></span><span></span><span></span><b>{{ {'jobs':'↗','score':'≋','candidates':'◎','interview':'↔','report':'◈','logs':'↳','settings':'✳'}[active] }}</b></div></section>
+{% endif %}

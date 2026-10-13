@@ -1,91 +1,26 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{% block title %}明猎{% endblock %}</title>
-<link rel="stylesheet" href="/static/css/style.css">
-{% block head %}{% endblock %}
-</head>
-<body>
-<div class="sidebar">
-    <a href="/" class="logo" style="text-decoration:none">
-        <div class="logo-icon">猎</div>
-        <div>明猎<div class="logo-sub">AI Recruitment</div></div>
-    </a>
-    <div class="nav-section">工作台</div>
-    <a href="/agent" class="nav-item {% if active == 'agent' %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-        AI 助手
-    </a>
-    <a href="/" class="nav-item {% if active == 'dashboard' %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-        仪表盘
-    </a>
-    <a href="/scrape" class="nav-item {% if active == 'scrape' %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-        简历抓取
-    </a>
-    <a href="/score" class="nav-item {% if active == 'score' %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
-        AI 评分
-    </a>
-    <a href="/candidates" class="nav-item {% if active == 'candidates' %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m22 21-3-3"/></svg>
-        候选人管理
-    </a>
-    <a href="/report" class="nav-item {% if active == 'report' %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
-        评分报告
-    </a>
-    <div class="nav-section">配置</div>
-    <a href="/jobs" class="nav-item {% if active == 'jobs' %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
-        岗位管理
-    </a>
-    <a href="/interview" class="nav-item {% if active == 'interview' %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-        面试管理
-    </a>
-    <a href="/logs" class="nav-item {% if active == 'logs' %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-        运行日志
-    </a>
-    <div class="nav-section">系统</div>
-    <a href="/settings" class="nav-item {% if active == 'settings' %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-        设置
-    </a>
-    <div class="sidebar-footer">
-        <div class="sidebar-user">
-            <div class="sidebar-avatar">{{ current_user.display_name[0] if current_user.display_name else '?' }}</div>
-            <div class="sidebar-username">{{ current_user.display_name }}</div>
-            <a href="/logout" class="op-link" style="margin-left:auto;font-size:12px">退出</a>
-        </div>
-    </div>
-</div>
-
-<div class="main">
-    {% block content %}{% endblock %}
-</div>
-
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="theme-color" content="#f7f9fd"><link rel="icon" href="/static/brand-mark.svg" type="image/svg+xml">
+<title>{% block title %}明猎 · 招聘工作台{% endblock %}</title><link rel="stylesheet" href="/static/css/style.css">{% block head %}{% endblock %}<link rel="stylesheet" href="/static/css/workspace.css"><link rel="stylesheet" href="/static/css/onboarding.css"><link rel="stylesheet" href="/static/css/motion.css"><script src="/static/js/workspace.js" defer></script><script src="/static/js/workspace-motion.js" defer></script><script src="/static/js/onboarding.js" defer></script></head>
+<body data-page="{{ active }}" data-user="{{ current_user.id }}">
+<a class="skip-link" href="#workspace">跳到主要内容</a><button class="sidebar-backdrop" aria-label="关闭导航" onclick="toggleSidebar(false)"></button>
+<aside class="sidebar" aria-label="主导航">
+<a href="/" class="logo"><img class="brand-mark" src="/static/brand-mark.svg" alt=""><span class="brand-word">明猎<span class="logo-sub">MINGLIE / RECRUITING</span></span></a>
+<button class="quick-switch" onclick="openCommand()"><span>⌕</span><span class="nav-label">快速前往</span><kbd>Ctrl K</kbd></button><nav>
+<a href="/" class="nav-item nav-assistant {{ 'active' if active == 'agent' }}" {% if active == 'agent' %}aria-current="page"{% endif %} title="招聘助手"><span class="nav-icon" aria-hidden="true">✧</span><span class="nav-label">招聘助手</span><span class="assistant-nav-dot"></span></a>
+<div class="nav-section">招聘进展</div>
+{% for key,href,label,icon in [('dashboard','/overview','工作概览','◫'),('candidates','/candidates','候选人','◎'),('interview','/interview','面试跟进','▦'),('report','/report','决策报告','▥')] %}
+<a href="{{ href }}" class="nav-item {{ 'active' if active == key }}" {% if active == key %}aria-current="page"{% endif %} title="{{ label }}"><span class="nav-icon" aria-hidden="true">{{ icon }}</span><span class="nav-label">{{ label }}</span>{% if key == 'scrape' %}<span class="nav-dot"></span>{% endif %}</a>{% endfor %}
+<details class="nav-details" {% if active in ['jobs','scrape','score','logs'] %}open{% endif %}><summary><span class="nav-label">工作详情</span><span class="nav-icon">⌄</span></summary>
+{% for key,href,label,icon in [('jobs','/jobs','招聘项目','▤'),('scrape','/scrape','搜寻详情','⌕'),('score','/score','分析详情','◈'),('logs','/logs','任务动态','≋')] %}<a href="{{ href }}" class="nav-item {{ 'active' if active == key }}" {% if active == key %}aria-current="page"{% endif %} title="{{ label }}"><span class="nav-icon" aria-hidden="true">{{ icon }}</span><span class="nav-label">{{ label }}</span></a>{% endfor %}</details>
+<a href="/settings" class="nav-item {{ 'active' if active == 'settings' }}" {% if active == 'settings' %}aria-current="page"{% endif %} title="设置"><span class="nav-icon" aria-hidden="true">⚙</span><span class="nav-label">设置</span></a></nav>
+<div class="sidebar-note"><span class="small-cap">LESS SEARCH. MORE CONNECTION.</span><p>把时间，留给值得的沟通。</p></div>
+<div class="sidebar-footer"><div class="sidebar-user"><div class="sidebar-avatar">{{ current_user.display_name[0] if current_user.display_name else 'M' }}</div><div class="sidebar-username">{{ current_user.display_name }}<small>个人工作空间</small></div><a href="/logout" title="退出登录" aria-label="退出登录" class="logout">↗</a></div></div>
+</aside>
+<div class="main"><header class="workspace-bar"><div class="breadcrumb"><button class="icon-button" onclick="toggleSidebar()" aria-label="切换侧边导航" id="sidebar-toggle" aria-expanded="true">☰</button><span>工作空间</span><span class="slash">/</span><strong id="page-crumb"></strong></div><div class="workspace-tools"><span class="today" id="workspace-date"></span><button class="btn btn-default btn-sm" type="button" data-open-onboarding>开始指南 <span aria-hidden="true">✧</span></button><button class="btn btn-default btn-sm" onclick="openCommand()">快速前往 <kbd>⌘ K</kbd></button></div></header>
+<main id="workspace" tabindex="-1">{% block content %}{% endblock %}</main><footer class="workspace-footer"><span>明猎 · 让招聘有据可循</span><a href="/settings">管理工作空间 ↗</a></footer></div>
+<dialog id="command-dialog" aria-labelledby="command-title"><div class="command-top"><span id="command-title">快速前往</span><button class="icon-button" onclick="closeCommand()" aria-label="关闭快捷导航">×</button></div><input id="command-input" placeholder="搜索页面或招聘项目…" aria-label="搜索页面或招聘项目" autocomplete="off"><div id="command-results"></div><div class="command-help">↑ ↓ 选择 <span>Enter 打开 · Esc 关闭</span></div></dialog><div id="toast-region" aria-live="polite"></div>{% include "onboarding.html" %}
 <script>
-function toast(msg, type='info') {
-    const el = document.createElement('div');
-    el.className = 'toast toast-' + type;
-    el.textContent = msg;
-    document.body.appendChild(el);
-    setTimeout(() => el.remove(), 3000);
-}
-
-async function api(url, options={}) {
-    const resp = await fetch(url, {
-        headers: {'Content-Type': 'application/json'},
-        ...options,
-    });
-    return resp.json();
-}
-</script>
-{% block scripts %}{% endblock %}
-</body>
-</html>
+function escapeHTML(value){const el=document.createElement('span');el.textContent=String(value??'');return el.innerHTML;}
+function toast(msg,type='info'){const el=document.createElement('div');el.className='toast toast-'+type;el.textContent=msg;document.getElementById('toast-region').append(el);setTimeout(()=>el.remove(),4500);}
+async function api(url,options={}){try{const resp=await fetch(url,{...options,headers:{'Content-Type':'application/json',...(options.headers||{})}});if(resp.redirected&&new URL(resp.url).pathname==='/login'){location.href='/login';return {success:false,error:'请重新登录'};}if(!resp.headers.get('content-type')?.includes('application/json'))throw Error();return await resp.json();}catch(error){toast('连接暂时中断，请检查服务后重试','error');return {success:false,error:'连接暂时中断，请重试'};}}
+</script>{% block scripts %}{% endblock %}</body></html>

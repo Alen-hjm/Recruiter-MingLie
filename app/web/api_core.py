@@ -18,12 +18,15 @@ from ..models import (
     get_search_strategies,
     get_search_strategy,
     get_settings,
+    get_onboarding,
+    get_db,
     get_user_stats,
     update_job,
     update_search_strategy,
     update_settings,
+    update_onboarding,
 )
-from ._helpers import latest_score_map, merge_scores_into_resumes
+from ._helpers import extract_total_score, latest_score_map, merge_scores_into_resumes
 
 bp = Blueprint("api_core", __name__, url_prefix="/api")
 
@@ -57,6 +60,23 @@ def api_stats():
 
 
 # ------------------------------------------------------------------ 设置
+@bp.route("/onboarding", methods=["GET", "POST"])
+@login_required
+def api_onboarding():
+    if request.method == "POST":
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify(success=False, error="引导数据格式不正确"), 400
+        status, step = data.get("status"), data.get("step")
+        if status not in ("in_progress", "skipped", "completed") or type(step) is not int or not 0 <= step <= 3:
+            return jsonify(success=False, error="引导状态不正确"), 400
+        update_onboarding(current_user.id, status, step)
+    state = get_onboarding(current_user.id)
+    settings = get_settings(current_user.id) or {}
+    state["model_configured"] = bool(settings.get("llm_api_key") or config.LLM_API_KEY)
+    return jsonify(success=True, data=state)
+
+
 @bp.route("/settings", methods=["GET", "POST"])
 @login_required
 def api_settings():
@@ -89,6 +109,48 @@ def api_settings():
 
 
 # ------------------------------------------------------------------ 岗位
+@bp.route("/overview/projects")
+@login_required
+def api_project_overview():
+    jobs = get_jobs(current_user.id)
+    cards = []
+    conn = get_db()
+    try:
+        for job in jobs[:4]:
+            people = merge_scores_into_resumes(
+                get_resumes_by_job(current_user.id, job["id"]),
+                latest_score_map(current_user.id, job["id"]),
+            )
+            analyzed = [p for p in people if (p.get("score100") or p.get("analysis")) and not p.get("score_error")]
+            matched = sum(extract_total_score(p) >= 80 for p in analyzed)
+            task = conn.execute(
+                "SELECT status, city FROM scrape_tasks WHERE user_id = ? AND job_id = ? "
+                "ORDER BY id DESC LIMIT 1", (current_user.id, job["id"]),
+            ).fetchone()
+            strategies = get_search_strategies(current_user.id, job["id"])
+            city = (task["city"] if task else None) or next((s.get("city") for s in strategies if s.get("city")), "")
+            # These are observed counts, not a guessed percentage of completion.
+            status = "new"
+            if task and task["status"] in ("attention", "error"):
+                status = "attention"
+            elif task and task["status"] in ("running", "queued", "pending"):
+                status = "searching"
+            elif matched:
+                status = "matched"
+            elif len(analyzed) < len(people):
+                status = "awaiting_analysis"
+            elif people:
+                status = "analyzed"
+            elif task and task["status"] == "done":
+                status = "empty"
+            cards.append({"id": job["id"], "name": job["name"], "city": city,
+                          "status": status, "collected": len(people),
+                          "analyzed": len(analyzed), "matched": matched})
+    finally:
+        conn.close()
+    return jsonify(success=True, data={"projects": cards, "total": len(jobs)})
+
+
 @bp.route("/jobs", methods=["GET"])
 @login_required
 def api_jobs_list():

@@ -1,273 +1,55 @@
 {% extends "base.html" %}
 {% set active = "report" %}
-{% block title %}评分报告 - 明猎{% endblock %}
-
+{% block title %}决策报告 - 明猎{% endblock %}
 {% block content %}
-<div class="topbar">
-    <div class="topbar-left">
-        <h1>评分报告</h1>
-        <p>查看 AI 评分结果和候选人排名</p>
-    </div>
-    <div class="topbar-right" id="report-actions" style="display:none">
-        <button class="btn btn-default" onclick="exportReport()">📥 导出报告</button>
-    </div>
-</div>
-
-<!-- 选择任务 -->
-<div class="card" style="margin-bottom:16px">
-    <div style="display:flex;gap:12px;align-items:center">
-        <label style="font-size:13px;color:var(--text-2);white-space:nowrap">选择评分任务：</label>
-        <select id="task-select" class="form-select" style="max-width:400px" onchange="loadReport()">
-            <option value="">加载中...</option>
-        </select>
-    </div>
-</div>
-
+<div class="topbar"><div class="topbar-left"><h1>决策报告</h1><p>把候选人的经历，整理成有依据的推荐</p></div><div id="report-actions" style="display:none"><button class="btn btn-default" onclick="exportReport()">导出报告 ↗</button></div></div>
+{% include 'page_intro.html' %}
+<div class="report-selector"><label for="task-select">查看分析批次</label><select id="task-select" class="form-select" onchange="loadReport()"><option value="">加载中…</option></select><a href="/score">开始新的分析 ↗</a></div>
 <div id="report-area" style="display:none">
-    <!-- 统计概览 -->
-    <div class="stats" id="report-stats" style="margin-bottom:16px">
-        <div class="stat-card" style="border-left:4px solid var(--primary)">
-            <div class="stat-label">总评分</div>
-            <div class="stat-value" id="r-total">-</div>
-        </div>
-        <div class="stat-card" style="border-left:4px solid var(--success)">
-            <div class="stat-label">通过</div>
-            <div class="stat-value" id="r-passed" style="color:var(--success)">-</div>
-        </div>
-        <div class="stat-card" style="border-left:4px solid var(--danger)">
-            <div class="stat-label">不通过</div>
-            <div class="stat-value" id="r-failed" style="color:var(--danger)">-</div>
-        </div>
-        <div class="stat-card" style="border-left:4px solid var(--warning)">
-            <div class="stat-label">通过率</div>
-            <div class="stat-value" id="r-rate" style="color:var(--warning)">-</div>
-        </div>
-    </div>
-
-    <!-- 候选人排名 -->
-    <div class="card" style="margin-bottom:16px">
-        <div class="card-header">
-            <div class="card-title">🏆 候选人排名</div>
-            <div style="display:flex;gap:8px">
-                <select class="form-select" style="width:120px" id="rank-filter" onchange="filterRanking()">
-                    <option value="">全部</option>
-                    <option value="pass">通过</option>
-                    <option value="fail">不通过</option>
-                </select>
-            </div>
-        </div>
-        <div id="ranking-table"></div>
-    </div>
-
-    <!-- 详细报告 -->
-    <div class="card">
-        <div class="card-header">
-            <div class="card-title">📄 详细报告</div>
-        </div>
-        <div id="detail-report" style="font-size:13px;line-height:1.8;color:var(--text-2);padding:16px"></div>
-    </div>
+  <div class="metric-strip report-metrics"><div><strong id="r-total">—</strong><span>已分析人选</span></div><div><strong id="r-passed">—</strong><span>建议进一步沟通</span></div><div><strong id="r-failed">—</strong><span>暂不推荐</span></div><div><strong id="r-rate">—</strong><span>推荐占比</span></div></div>
+  <div class="report-layout"><section><div class="section-heading"><div><span class="eyebrow">CANDIDATE REVIEW</span><h3>候选人评估</h3></div><select id="rank-filter" class="form-select" onchange="filterRanking()"><option value="">全部人选</option><option value="pass">建议沟通</option><option value="fail">暂不推荐</option></select></div><div id="ranking-table" class="review-list"></div></section><aside class="report-guide"><span class="eyebrow">BEFORE THE CONVERSATION</span><h3>推荐之前，再确认一步。</h3><p>分数帮助你安排沟通顺序。具体经历、意愿与实际岗位要求，仍需要在对话中核实。</p><div class="guide-question"><b>01</b><span>哪些经历直接对应岗位需求？</span></div><div class="guide-question"><b>02</b><span>哪些信息还缺少原文支持？</span></div><div class="guide-question"><b>03</b><span>下一次沟通，最该确认什么？</span></div><a href="/candidates">进入候选人工作区 ↗</a></aside></div>
+  <details class="card report-document"><summary>查看完整报告 <span>原始分析内容与匹配依据</span></summary><div id="detail-report"></div></details>
 </div>
-
-<div id="report-empty" class="card">
-    <div class="empty">
-        <p>选择一个评分任务查看报告</p>
-    </div>
-</div>
+<div id="report-empty" class="card"><div class="empty"><span class="empty-mark">◈</span><p>选择一个分析批次，查看人选与推荐依据。</p><a href="/score" class="btn btn-default">去分析候选人 ↗</a></div></div>
 {% endblock %}
-
 {% block scripts %}
-<style>
-    .tag-req-pass {
-        display: inline-block;
-        padding: 2px 8px;
-        border-radius: 4px;
-        font-size: 11px;
-        background: #e6f9ee;
-        color: #1a8a4a;
-        border: 1px solid #b7ebc9;
-        margin: 2px 4px 2px 0;
-        white-space: nowrap;
-    }
-    .tag-req-fail {
-        display: inline-block;
-        padding: 2px 8px;
-        border-radius: 4px;
-        font-size: 11px;
-        background: #fff0f0;
-        color: #d4380d;
-        border: 1px solid #ffccc7;
-        margin: 2px 4px 2px 0;
-        white-space: nowrap;
-    }
-    .req-fail-text {
-        color: #d4380d;
-        font-weight: 600;
-    }
-</style>
 <script>
-let currentScored = [];
-let currentMode = '100';
-
-async function loadTasks() {
-    const resp = await api('/api/score/list');
-    const sel = document.getElementById('task-select');
-    sel.innerHTML = '<option value="">请选择评分任务</option>';
-    if (resp.success) {
-        resp.data.filter(t => t.status === 'done').forEach(t => {
-            sel.innerHTML += `<option value="${t.id}">${t.job_name||'未命名'} · ${t.mode}分制 · ${t.passed_count}/${t.total_count} 通过 · ${new Date(t.created_at).toLocaleDateString()}</option>`;
-        });
-    }
-
-    const params = new URLSearchParams(location.search);
-    const id = params.get('id');
-    if (id) {
-        sel.value = id;
-        loadReport();
-    }
+let currentScored=[],currentMode='100',currentReport='',reportRequest=0;
+const candidateScore=r=>r.score100||r.analysis||{};
+const isRecommended=(r,mode=currentMode)=>{const s=candidateScore(r);return typeof s.pass==='boolean'?s.pass:Number(s.total_score??0)>=(mode==='100'?80:7);};
+async function loadTasks(){
+ const resp=await api('/api/score/list'),sel=document.getElementById('task-select');sel.replaceChildren(new Option('请选择分析批次',''));
+ if(resp.success)for(const t of resp.data.filter(t=>t.status==='done'))sel.add(new Option(`${t.job_name||'未命名岗位'} · ${t.total_count} 位人选 · ${new Date(t.created_at).toLocaleDateString('zh-CN')}`,t.id));
+ const requested=new URLSearchParams(location.search).get('id'),saved=readState('/report:task-select');
+ const id=requested||saved;if(id&&[...sel.options].some(o=>o.value===String(id))){sel.value=id;loadReport();}
 }
-
-async function loadReport() {
-    const taskId = document.getElementById('task-select').value;
-    if (!taskId) {
-        document.getElementById('report-area').style.display = 'none';
-        document.getElementById('report-empty').style.display = 'block';
-        document.getElementById('report-actions').style.display = 'none';
-        return;
-    }
-
-    const [reportResp, scoreResp] = await Promise.all([
-        api('/api/report/' + taskId),
-        api('/api/score/' + taskId),
-    ]);
-
-    if (!reportResp.success) { toast(reportResp.error, 'error'); return; }
-
-    document.getElementById('report-area').style.display = 'block';
-    document.getElementById('report-empty').style.display = 'none';
-    document.getElementById('report-actions').style.display = 'flex';
-
-    const {report, mode} = reportResp.data;
-    currentMode = mode;
-
-    // 统计
-    if (scoreResp.success && scoreResp.data.scored) {
-        currentScored = scoreResp.data.scored;
-        const valid = currentScored.filter(r => !r._error);
-        const passed = valid.filter(r => (r.score100 || {}).pass).length;
-        const failed = valid.length - passed;
-        const rate = valid.length > 0 ? Math.round(passed / valid.length * 100) : 0;
-
-        document.getElementById('r-total').textContent = valid.length;
-        document.getElementById('r-passed').textContent = passed;
-        document.getElementById('r-failed').textContent = failed;
-        document.getElementById('r-rate').textContent = rate + '%';
-
-        renderRanking(currentScored, mode);
-    }
-
-    document.getElementById('detail-report').innerHTML = renderMarkdown(report);
+async function loadReport(){
+ const taskId=document.getElementById('task-select').value,request=++reportRequest;
+ saveState('/report:task-select',taskId);
+ document.getElementById('report-area').style.display='none';document.getElementById('report-actions').style.display='none';document.getElementById('report-empty').style.display=taskId?'none':'block';
+ if(!taskId)return;
+ const [reportResp,scoreResp]=await Promise.all([api('/api/report/'+taskId),api('/api/score/'+taskId)]);
+ if(request!==reportRequest)return;
+ if(!reportResp.success||!scoreResp.success){document.getElementById('report-empty').style.display='block';toast(reportResp.error||scoreResp.error||'报告暂时无法加载','error');return;}
+ currentReport=String(reportResp.data.report||'');currentMode=String(reportResp.data.mode||'100');currentScored=scoreResp.data.scored||[];
+ const valid=currentScored.filter(r=>!r._error),passed=valid.filter(r=>isRecommended(r)).length;
+ document.getElementById('r-total').textContent=valid.length;document.getElementById('r-passed').textContent=passed;document.getElementById('r-failed').textContent=valid.length-passed;document.getElementById('r-rate').textContent=valid.length?Math.round(passed/valid.length*100)+'%':'—';
+ renderRanking();document.getElementById('detail-report').innerHTML=renderMarkdown(currentReport);document.getElementById('report-area').style.display='block';document.getElementById('report-actions').style.display='block';
 }
-
-function renderRanking(scored, mode) {
-    const valid = scored.filter(r => !r._error);
-    valid.sort((a, b) => {
-        const sa = (a.score100 || a.analysis || {}).total_score || 0;
-        const sb = (b.score100 || b.analysis || {}).total_score || 0;
-        return sb - sa;
-    });
-
-    const filter = document.getElementById('rank-filter').value;
-    let filtered = valid;
-    if (filter === 'pass') filtered = valid.filter(r => (r.score100 || {}).pass);
-    if (filter === 'fail') filtered = valid.filter(r => !(r.score100 || {}).pass);
-
-    let html = '<table><thead><tr><th>#</th><th>候选人</th><th>总分</th><th>学历</th><th>经验</th><th>硬技能</th><th>硬需求</th><th>状态</th><th>推荐</th><th>亮点</th></tr></thead><tbody>';
-    filtered.forEach((r, i) => {
-        const name = r.name || r.title || `候选人${i+1}`;
-        const s = r.score100 || r.analysis || {};
-        const score = s.total_score || 0;
-        const cls = score >= 80 ? 'score-high' : score >= 60 ? 'score-mid' : 'score-low';
-        const scores = s.scores || {};
-        const edu = scores.education ? scores.education.score + '/' + scores.education.max : '-';
-        const exp = scores.experience ? scores.experience.score + '/' + scores.experience.max : '-';
-        const hard = scores.hard_skills ? scores.hard_skills.score + '/' + scores.hard_skills.max : '-';
-        const tag = mode === '100' ? (s.pass ? 'tag-pass' : 'tag-fail') : (score >= 7 ? 'tag-pass' : score >= 5 ? 'tag-wait' : 'tag-fail');
-        const rec = s.recommendation || '-';
-        const highlights = (s.highlights || []).slice(0, 2).join(', ') || '-';
-
-        // 硬需求 tag
-        let reqHtml = '-';
-        const hardReqs = s.hard_requirements_met || [];
-        if (hardReqs.length > 0) {
-            reqHtml = hardReqs.map(req => {
-                const met = req.met;
-                const label = req.requirement || '';
-                const shortLabel = label.length > 12 ? label.substring(0, 12) + '…' : label;
-                return met
-                    ? `<span class="tag-req-pass" title="${label}">✓ ${shortLabel}</span>`
-                    : `<span class="tag-req-fail" title="${req.detail || label}">✗ ${shortLabel}</span>`;
-            }).join('');
-        }
-
-        html += `<tr>
-            <td style="color:var(--text-4)">${i+1}</td>
-            <td style="font-weight:500">${name}</td>
-            <td><span class="score-pill ${cls}">${score}${mode==='100'?'分':''}</span></td>
-            <td style="font-size:12px">${edu}</td>
-            <td style="font-size:12px">${exp}</td>
-            <td style="font-size:12px">${hard}</td>
-            <td style="font-size:11px;max-width:260px">${reqHtml}</td>
-            <td><span class="tag ${tag}">${mode==='100'?(s.pass?'通过':'不通过'):(score>=7?'推荐':score>=5?'观望':'不合适')}</span></td>
-            <td style="font-size:12px">${rec}</td>
-            <td style="font-size:12px;color:var(--text-3);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${highlights}</td>
-        </tr>`;
-    });
-    html += '</tbody></table>';
-    document.getElementById('ranking-table').innerHTML = html;
+function renderRanking(){
+ const valid=currentScored.filter(r=>!r._error).sort((a,b)=>Number(candidateScore(b).total_score||0)-Number(candidateScore(a).total_score||0));
+ const filter=document.getElementById('rank-filter').value,filtered=valid.filter(r=>!filter||(filter==='pass'?isRecommended(r):!isRecommended(r)));
+ document.getElementById('ranking-table').innerHTML=filtered.map(r=>{
+  const s=candidateScore(r),rank=valid.indexOf(r)+1,score=s.total_score??0,passed=isRecommended(r),highlights=Array.isArray(s.highlights)?s.highlights:[],requirements=Array.isArray(s.hard_requirements_met)?s.hard_requirements_met:[];
+  return `<article class="review-card"><div class="review-heading"><span class="review-rank">${String(rank).padStart(2,'0')}</span><div><h4>${escapeHTML(r.name||r.title||'未命名人选')}</h4><p>${escapeHTML([r.company,r.location||r.city,r.experience].filter(Boolean).join(' · ')||'更多经历见完整报告')}</p></div><div class="review-score"><strong>${escapeHTML(score)}</strong><span>匹配分 / ${currentMode==='100'?'100':'10'}</span></div></div><div class="review-verdict"><span class="tag ${passed?'tag-pass':'tag-wait'}">${passed?'建议进一步沟通':'暂不推荐'}</span><span>${escapeHTML(s.recommendation||'请结合岗位需求核实')}</span></div><p class="review-summary">${escapeHTML(s.summary||s.reason||highlights.slice(0,2).join('；')||'尚无文字摘要，请展开匹配依据或查看完整报告。')}</p>${highlights.length?`<div class="review-highlights">${highlights.slice(0,3).map(h=>`<span>${escapeHTML(h)}</span>`).join('')}</div>`:''}<details class="review-evidence"><summary>展开匹配依据</summary>${requirements.length?requirements.map(req=>`<div class="evidence-row"><span class="tag ${req.met?'tag-pass':'tag-wait'}">${req.met?'有依据':'待核实'}</span><div><b>${escapeHTML(req.requirement||'岗位要求')}</b><p>${escapeHTML(req.detail||'请结合简历原文确认')}</p></div></div>`).join(''):'<p>当前分析未附结构化依据，请查看完整报告并在沟通中核实。</p>'}</details></article>`;
+ }).join('')||'<div class="card empty"><p>当前筛选下没有人选。</p></div>';
 }
-
-function filterRanking() {
-    renderRanking(currentScored, currentMode);
-}
-
-function renderMarkdown(md) {
-    return md
-        .replace(/^### (.+)$/gm, '<h4 style="margin:16px 0 8px;color:var(--text-1)">$1</h4>')
-        .replace(/^## (.+)$/gm, '<h3 style="margin:20px 0 10px;color:var(--text-1);padding-bottom:8px;border-bottom:1px solid var(--border)">$1</h3>')
-        .replace(/^# (.+)$/gm, '<h2 style="margin:24px 0 12px;color:var(--text-1)">$1</h2>')
-        .replace(/^---$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">')
-        // 链接
-        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:none;border-bottom:1px dashed var(--primary)">$1</a>')
-        // 硬需求 tag（✓ / ✗ 开头的行）
-        .replace(/^- ✓ (.+)$/gm, '<span class="tag-req-pass">✓ $1</span>')
-        .replace(/^- ✗ (.+)$/gm, '<span class="tag-req-fail">✗ $1</span>')
-        // 不满足的文字标红
-        .replace(/不满足/g, '<span class="req-fail-text">不满足</span>')
-        .replace(/不及格/g, '<span class="req-fail-text">不及格</span>')
-        // 列表
-        .replace(/^- \*\*(.+?)\*\*: (.+)$/gm, '<div style="margin:4px 0"><strong>$1</strong>: $2</div>')
-        .replace(/^- (.+)$/gm, '<div style="margin:2px 0;padding-left:12px">• $1</div>')
-        .replace(/^\s{2}- (.+)$/gm, '<div style="margin:2px 0;padding-left:24px;font-size:12px">◦ $1</div>')
-        // 粗体
-        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        // 引用
-        .replace(/^> (.+)$/gm, '<blockquote style="border-left:3px solid var(--primary);padding:6px 12px;margin:8px 0;background:#f8f9fa;color:var(--text-2);font-size:12px">$1</blockquote>')
-        .replace(/\n\n/g, '<br><br>')
-        .replace(/\n/g, '<br>');
-}
-
-function exportReport() {
-    const taskId = document.getElementById('task-select').value;
-    if (!taskId) return;
-    const content = document.getElementById('detail-report').innerText;
-    const blob = new Blob([content], {type: 'text/plain;charset=utf-8'});
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `评分报告_${new Date().toISOString().slice(0,10)}.txt`;
-    a.click();
-    toast('报告已导出', 'success');
-}
-
+function filterRanking(){renderRanking();}
+function renderMarkdown(md){return escapeHTML(md)
+ .replace(/^### (.+)$/gm,'<h4>$1</h4>').replace(/^## (.+)$/gm,'<h3>$1</h3>').replace(/^# (.+)$/gm,'<h2>$1</h2>')
+ .replace(/^---$/gm,'<hr>').replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+ .replace(/^&gt; (.+)$/gm,'<blockquote>$1</blockquote>').replace(/^- (.+)$/gm,'<div class="report-bullet">• $1</div>').replace(/\n/g,'<br>');}
+function exportReport(){if(!currentReport)return;const url=URL.createObjectURL(new Blob([currentReport],{type:'text/plain;charset=utf-8'})),a=document.createElement('a');a.href=url;a.download=`明猎推荐报告_${new Date().toISOString().slice(0,10)}.txt`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('报告已导出','success');}
 loadTasks();
 </script>
 {% endblock %}

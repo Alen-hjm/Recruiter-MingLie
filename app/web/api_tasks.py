@@ -23,6 +23,7 @@ from ..models import (
     get_search_strategy,
     get_settings,
     get_unscored_resumes,
+    update_scrape_task,
 )
 from ..services.scoring import build_score_config, start_score_task
 from ..services.scraping import build_scrape_config, start_scrape_task
@@ -36,8 +37,15 @@ bp = Blueprint("api_tasks", __name__, url_prefix="/api")
 @login_required
 def api_scrape_start():
     data = request.json or {}
-    job_id = data.get("job_id")
-    strategy_id = data.get("strategy_id")
+    try:
+        job_id = int(data["job_id"]) if data.get("job_id") else None
+        strategy_id = int(data["strategy_id"]) if data.get("strategy_id") else None
+        requested_pages = max(1, min(int(data.get("max_pages", 3)), config.SCRAPE_MAX_PAGES_LIMIT))
+        target_count = int(data["max_results"]) if "max_results" in data else None
+        if target_count is not None and not 1 <= target_count <= 50:
+            return jsonify({"success": False, "error": "本次收集上限应在 1 至 50 份之间"}), 400
+    except (ValueError, TypeError):
+        return jsonify({"success": False, "error": "岗位、策略和页数格式不正确"}), 400
 
     if job_id is None:
         return jsonify({"success": False, "error": "请选择归属岗位"}), 400
@@ -46,10 +54,14 @@ def api_scrape_start():
     if not job or job["user_id"] != current_user.id:
         return jsonify({"success": False, "error": "岗位不存在"}), 404
 
+    auto_score = data.get("auto_score") is True
+    if auto_score and (not job.get("job_description") or not config.resolve_llm_config(get_settings(current_user.id))["api_key"]):
+        return jsonify({"success": False, "error": "自动分析需要岗位 JD 和已配置的模型密钥"}), 400
+
     # 关键词来源优先级：搜索策略 > 前端传入 > 岗位配置
     if strategy_id:
         strategy = get_search_strategy(int(strategy_id))
-        if not strategy or strategy["user_id"] != current_user.id:
+        if not strategy or strategy["user_id"] != current_user.id or strategy["job_id"] != int(job_id):
             return jsonify({"success": False, "error": "搜索策略不存在"}), 404
         keyword = strategy["keyword"]
         city = strategy.get("city") or "上海"
@@ -57,11 +69,13 @@ def api_scrape_start():
         max_pages = min(int(strategy.get("max_pages", 3)), config.SCRAPE_MAX_PAGES_LIMIT)
     else:
         platform = data.get("platform", "liepin")
-        max_pages = min(int(data.get("max_pages", 3)), config.SCRAPE_MAX_PAGES_LIMIT)
+        max_pages = requested_pages
         keyword = (data.get("keyword") or "").strip() or (job.get("keyword") or "").strip()
         city = (data.get("city") or "").strip() or "上海"
 
     search_mode = data.get("search_mode", "auto")
+    if platform != "liepin" or search_mode not in ("auto", "manual"):
+        return jsonify({"success": False, "error": "不支持的平台或搜索模式"}), 400
     if not keyword and search_mode != "manual":
         return jsonify({"success": False, "error": "请填写关键词或切换为手动搜索模式"}), 400
 
@@ -72,8 +86,44 @@ def api_scrape_start():
         get_settings(current_user.id) or {}, keyword, city, max_pages,
         search_mode=search_mode, user_id=current_user.id,
     )
-    start_scrape_task(task_id, scrape_config, user_id=current_user.id, job_id=int(job_id))
+    scrape_config["auto_score"] = auto_score
+    if target_count is not None:
+        scrape_config["scraper"]["max_results"] = target_count
+    try:
+        start_scrape_task(task_id, scrape_config, user_id=current_user.id, job_id=int(job_id))
+    except ValueError as exc:
+        update_scrape_task(task_id, status="error", error_msg=str(exc))
+        return jsonify({"success": False, "error": str(exc)}), 409
 
+    return jsonify({"success": True, "task_id": task_id})
+
+
+@bp.route("/scrape/<int:task_id>/resume", methods=["POST"])
+@login_required
+def api_scrape_resume(task_id):
+    task = get_scrape_task(task_id)
+    if not task or task["user_id"] != current_user.id:
+        return jsonify({"success": False, "error": "任务不存在"}), 404
+    if task["status"] not in ("attention", "error"):
+        return jsonify({"success": False, "error": "仅可恢复待处理或失败任务"}), 409
+    job = get_job(task["job_id"]) if task["job_id"] else None
+    if not job or job["user_id"] != current_user.id:
+        return jsonify({"success": False, "error": "关联岗位不存在"}), 404
+    saved = json.loads(task.get("run_config_json") or "{}")
+    runtime = build_scrape_config(get_settings(current_user.id) or {}, task["keyword"],
+        task["city"], task["max_pages"], user_id=current_user.id,
+        search_mode=saved.get("scraper", {}).get("search_mode", "auto"))
+    if "quick_filter" in saved:
+        runtime["quick_filter"] = saved["quick_filter"]
+    runtime["auto_score"] = saved.get("auto_score", False)
+    if "max_results" in saved.get("scraper", {}):
+        runtime["scraper"]["max_results"] = saved["scraper"]["max_results"]
+    if runtime["auto_score"] and not config.resolve_llm_config(get_settings(current_user.id))["api_key"]:
+        return jsonify({"success": False, "error": "自动分析需要模型密钥，请先配置"}), 400
+    try:
+        start_scrape_task(task_id, runtime, user_id=current_user.id, job_id=task["job_id"])
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 409
     return jsonify({"success": True, "task_id": task_id})
 
 
@@ -89,8 +139,9 @@ def api_scrape_status(task_id):
         "keyword": task["keyword"], "city": task["city"],
         "result_count": task["result_count"], "error_msg": task["error_msg"],
         "created_at": task["created_at"], "finished_at": task["finished_at"],
+        "score_task_id": task.get("score_task_id"),
     }
-    if task["status"] == "done" and task["resumes_json"]:
+    if task["resumes_json"]:
         result["resumes"] = json.loads(task["resumes_json"])
     return jsonify({"success": True, "data": result})
 
@@ -101,6 +152,7 @@ def api_scrape_list():
     tasks = get_scrape_tasks(current_user.id, limit=20)
     for t in tasks:
         t.pop("resumes_json", None)  # 列表不需要完整简历，省带宽
+        t.pop("run_config_json", None)
     return jsonify({"success": True, "data": tasks})
 
 

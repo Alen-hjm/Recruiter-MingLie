@@ -19,10 +19,11 @@ from datetime import datetime
 import httpx
 from playwright.async_api import async_playwright, Page, BrowserContext
 from rich.console import Console
+from . import config as app_config
+from .scrape_state import ScrapeNeedsAttention, page_problem
 
 from .anti_detect import (
-    human_delay, human_click, human_scroll,
-    reading_delay, page_load_delay, between_cards_delay,
+    human_delay, page_load_delay,
     HumanPacer, STEALTH_ARGS, STEALTH_JS,
 )
 
@@ -378,10 +379,16 @@ class LiepinHunterScraper:
         self.scraper_cfg = config.get("scraper", {})
         self.search_cfg = config.get("search", {})
         self.results = []
-        self.data_dir = Path("data")
-        self.data_dir.mkdir(exist_ok=True)
-        self.screenshot_dir = Path("screenshots")
-        self.screenshot_dir.mkdir(exist_ok=True)
+        self.data_dir = app_config.DATA_DIR
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.screenshot_dir = app_config.SCREENSHOT_DIR
+        self.screenshot_dir.mkdir(parents=True, exist_ok=True)
+        self.on_resume = config.get("on_resume")
+        self.on_progress = config.get("on_progress")
+        self.seen_ids = set(config.get("seen_ids", []))
+        self.pages_processed = 0
+        self.duplicates_skipped = 0
+        self.details_completed = 0
         self._chrome_process = None  # CDP 模式启动的 Chrome 进程
 
         # 合并用户自定义的快速筛选规则
@@ -389,14 +396,90 @@ class LiepinHunterScraper:
         if user_rules:
             self.QUICK_FILTER_RULES = {**self.QUICK_FILTER_RULES, **user_rules}
 
+    def _record_resume(self, resume: dict):
+        from .models import extract_resume_id
+        key = extract_resume_id(resume)
+        if key in self.seen_ids:
+            return False
+        if self.on_resume:
+            self.on_resume(resume)
+        self.seen_ids.add(key)
+        self.results.append(resume)
+        return True
+
+    async def _check_page(self, page):
+        # 只等待当前页面完成渲染，不刷新或重试被限制的请求。
+        try:
+            await page.wait_for_function("document.body && document.body.innerText.trim().length > 0", timeout=5000)
+        except Exception:
+            pass
+        text = await page.locator("body").inner_text(timeout=3000) if await page.locator("body").count() else ""
+        problem = page_problem(page.url, text)
+        if problem:
+            raise ScrapeNeedsAttention(problem)
+
+    async def _observe_search_stability(self, page):
+        seconds = max(0, min(300, int(self.scraper_cfg.get("stability_seconds", 0))))
+        if not seconds:
+            return
+        deadline = asyncio.get_running_loop().time() + seconds
+        while True:
+            await self._check_page(page)
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                break
+            if self.on_progress:
+                self.on_progress(f"正在验证搜索页稳定性，还需约 {int(remaining) + 1} 秒")
+            await asyncio.sleep(min(2, remaining))
+
+    async def _run_scrapling(self):
+        from .scrapling_session import run_session
+        from .scrape_diagnostics import NavigationLog
+        self.pacer = HumanPacer(on_progress=self.on_progress)
+        log = NavigationLog(self.data_dir / "diagnostics")
+
+        async def setup(page):
+            log.attach(page)
+
+        async def collect(page):
+            log.stage("login")
+            await self._ensure_login(page, navigate=False)
+            log.stage("search")
+            await self._setup_search(page)
+            log.stage("details")
+            await self._collect_pages(page)
+            await self._check_page(page)
+            self._validate_collection()
+            log.stage("collection_summary", pages=self.pages_processed,
+                      details_completed=self.details_completed,
+                      duplicates_skipped=self.duplicates_skipped, saved=len(self.results))
+            log.stage("complete")
+
+        try:
+            await run_session(self.BASE_URL, self.scraper_cfg, collect, setup)
+            return self.results
+        except Exception as exc:
+            log.stage("attention" if isinstance(exc, ScrapeNeedsAttention) else "error",
+                      error_type=type(exc).__name__)
+            raise
+        finally:
+            if self.results:
+                self._save_results()
+            log.save()
+
     async def run(self) -> list[dict]:
-        """主流程（异常时也返回已抓取的数据）"""
+        """主流程；异常向任务层传播，逐条保存的结果保留。"""
+        mode = self.scraper_cfg.get("launch_mode", "browser")
+        if mode == "scrapling":
+            return await self._run_scrapling()
+        if mode not in {"browser", "cdp", "stealth", "basic"}:
+            raise ValueError("不支持的采集模式")
         async with async_playwright() as p:
             # ── 浏览器启动模式 ──
-            # cdp: 自动启动真实 Chrome/Edge + CDP 连接（推荐，最难被检测）
+            # cdp: 旧手动搜索监听模式；不保证站点兼容性。
             # stealth: 用反检测插件启动 + 真实 Edge 登录数据
             # basic: 纯 Playwright 启动（最弱，容易被检测）
-            launch_mode = self.scraper_cfg.get("launch_mode", "stealth")
+            launch_mode = self.scraper_cfg.get("launch_mode", "browser")
 
             if launch_mode == "cdp":
                 # ── CDP 纯监听模式：WebSocket 直连，零注入 ──
@@ -406,10 +489,7 @@ class LiepinHunterScraper:
                 
                 cdp_ready = await _wait_cdp_ready(cdp_port, timeout=5)
                 if not cdp_ready:
-                    console.print(f"[yellow]端口 {cdp_port} 未响应[/]")
-                    console.print("[yellow]请先双击 start_chrome_debug.bat 启动 Chrome，然后按 Enter[/]")
-                    await asyncio.get_event_loop().run_in_executor(None, input)
-                    cdp_ready = await _wait_cdp_ready(cdp_port, timeout=10)
+                    raise ScrapeNeedsAttention("旧版监听模式的浏览器未连接。自动寻访请使用 browser 模式。")
                 
                 if not cdp_ready:
                     console.print(f"[red]端口 {cdp_port} 无响应，请检查 Chrome 是否已启动[/]")
@@ -431,12 +511,23 @@ class LiepinHunterScraper:
                             is_promising, reason = self.quick_evaluate_card(info)
                             if not is_promising:
                                 continue
-                            self.results.append(info)
+                            self._record_resume(info)
                         except Exception:
                             continue
                     console.print(f"[green]✓ 提取 {len(self.results)} 条有效简历[/]")
                 else:
                     console.print("[yellow]未捕获到简历数据[/]")
+
+            elif launch_mode == "browser":
+                # 专用用户目录保留人工登录状态；不复制个人浏览器资料或修改指纹。
+                context = await p.chromium.launch_persistent_context(
+                    user_data_dir=self.scraper_cfg["user_data_dir"],
+                    headless=self.scraper_cfg.get("headless", False),
+                    viewport={"width": 1440, "height": 900},
+                    locale="zh-CN",
+                )
+                context.set_default_timeout(self.scraper_cfg.get("timeout", 30000))
+                page = context.pages[0] if context.pages else await context.new_page()
 
             elif launch_mode == "stealth":
                 # ── Stealth 模式：反检测插件 + 真实 Edge 登录数据 ──
@@ -491,36 +582,13 @@ class LiepinHunterScraper:
                 return self.results
 
             # ── 以下为非 CDP 模式（stealth/basic），需要 Playwright ──
-            self.pacer = HumanPacer()
+            self.pacer = HumanPacer(on_progress=self.on_progress)
 
             try:
                 await self._ensure_login(page)
                 await self._setup_search(page)
 
-                max_pages = self.search_cfg.get("max_pages", 5)
-                if max_pages > 5:
-                    console.print("[yellow]⚠ 为避免风控，单次最多抓取5页[/]")
-                    max_pages = 5
-
-                for page_num in range(1, max_pages + 1):
-                    if await self.pacer.should_stop():
-                        break
-                    console.print(f"\n[bold cyan]=== 第 {page_num}/{max_pages} 页 ===[/]")
-                    resumes = await self._scrape_page(page, page_num)
-                    self.results.extend(resumes)
-                    console.print(f"本页抓取: {len(resumes)} 条，累计: {len(self.results)} 条")
-                    if self.results:
-                        self._save_results()
-                    if len(self.results) >= 100:
-                        break
-                    if page_num < max_pages:
-                        has_next = await self._go_next_page(page)
-                        if not has_next:
-                            break
-                        await page_load_delay()
-
-                self._save_results()
-                console.print(f"\n[bold green]完成！共抓取 {len(self.results)} 份简历[/]")
+                await self._collect_pages(page)
 
             except Exception as e:
                 error_msg = str(e)
@@ -535,7 +603,7 @@ class LiepinHunterScraper:
                 if self.results:
                     self._save_results()
                     console.print(f"[yellow]已保存已抓取的 {len(self.results)} 条数据[/]")
-                # 注意：不再 raise，让 finally 返回 self.results
+                raise
             finally:
                 if self.results:
                     self._save_results()
@@ -543,10 +611,46 @@ class LiepinHunterScraper:
                     await context.close()
                 except Exception:
                     pass
-                except Exception:
-                    pass
 
         return self.results
+
+    def _validate_collection(self):
+        if self.scraper_cfg.get("require_detail") and not self.details_completed:
+            raise ScrapeNeedsAttention("本次未完成详情读取与返回，验证尚未通过。")
+        if self.pages_processed < self.scraper_cfg.get("required_pages", 1):
+            raise ScrapeNeedsAttention("未完成要求的验证页数，不能判定翻页测试通过。")
+
+    async def _collect_pages(self, page):
+        max_pages = self.search_cfg.get("max_pages", 5)
+        if max_pages > 5:
+            console.print("[yellow]⚠ 为避免风控，单次最多抓取5页[/]")
+            max_pages = 5
+
+        for page_num in range(1, max_pages + 1):
+            await self._check_page(page)
+            if self.on_progress:
+                self.on_progress(f"正在处理第 {page_num}/{max_pages} 页，已保存 {len(self.results)} 份新简历")
+            if await self.pacer.should_stop():
+                raise ScrapeNeedsAttention("本次采集已运行 30 分钟，已保留结果，请休息后手动继续。")
+            console.print(f"\n[bold cyan]=== 第 {page_num}/{max_pages} 页 ===[/]")
+            resumes = await self._scrape_page(page, page_num)
+            self.pages_processed += 1
+            for resume in resumes:
+                self._record_resume(resume)
+            console.print(f"本页抓取: {len(resumes)} 条，累计: {len(self.results)} 条")
+            if self.results:
+                self._save_results()
+            if len(self.results) >= self.scraper_cfg.get("max_results", 100):
+                break
+            if page_num < max_pages:
+                has_next = await self._go_next_page(page)
+                if not has_next:
+                    break
+                await self.pacer.pause("page")
+                await self._check_page(page)
+
+        self._save_results()
+        console.print(f"\n[bold green]完成！共抓取 {len(self.results)} 份简历[/]")
 
     @staticmethod
     def _find_edge_profile() -> str | None:
@@ -754,64 +858,55 @@ class LiepinHunterScraper:
 
         return resumes
 
-    async def _ensure_login(self, page: Page):
-        """确保已登录"""
-        console.print("[bold]检查登录状态...[/]")
-        await page.goto(self.BASE_URL, wait_until="domcontentloaded")
-        await human_delay(2.0, 4.0)
-
-        # 检查是否被风控（空白页）
-        current_url = page.url
-        page_content = await page.content()
-        if "about:blank" in current_url or len(page_content) < 200:
-            console.print("[yellow]⚠ 页面空白，可能被风控[/]")
-            console.print("[yellow]   等待 5 秒后重试...[/]")
-            await asyncio.sleep(5)
+    async def _ensure_login(self, page: Page, navigate=True):
+        """给人工登录一个有界等待窗口，不在后台线程等待终端输入。"""
+        from urllib.parse import urlsplit
+        if navigate:
             await page.goto(self.BASE_URL, wait_until="domcontentloaded")
-            await human_delay(2.0, 4.0)
-
-        # 猎头端登录后通常有用户头像或"退出"按钮
-        logged_indicators = [
-            '[class*="user-info"]',
-            '[class*="avatar"]',
-            '[class*="header-user"]',
-            'text="退出"',
-            '[class*="logout"]',
-            '[class*="header"] img',
-        ]
-
-        for indicator in logged_indicators:
-            el = await page.query_selector(indicator)
-            if el:
-                console.print("[green]✓ 已登录[/]")
-                return
-
-        # 检查是否在登录页
-        if "login" in page.url or "passport" in page.url:
-            console.print("[yellow]跳转到登录页，请在浏览器中登录...[/]")
-        else:
-            console.print("[yellow]未登录，请在浏览器中登录猎头端...[/]")
-        
-        console.print("[yellow]（支持扫码/手机号登录，登录后脚本自动继续）[/]")
-
-        # 等待登录成功
-        for indicator in logged_indicators:
-            try:
-                await page.wait_for_selector(indicator, timeout=180000)
-                console.print("[green]✓ 登录成功！[/]")
-                return
-            except Exception:
+        selectors = '[class*="user-info"], [class*="header-user"], [class*="logout"]'
+        login_wait = max(30, min(600, int(self.scraper_cfg.get("login_wait_seconds", 120))))
+        deadline = asyncio.get_running_loop().time() + login_wait
+        waiting_for_verification = False
+        login_observations = 0
+        if self.on_progress:
+            self.on_progress(f"请在采集浏览器完成登录，系统最多等待 {login_wait // 60} 分钟")
+        while asyncio.get_running_loop().time() < deadline:
+            if page.is_closed():
+                raise ScrapeNeedsAttention("采集浏览器已关闭，请重新开始验证。")
+            text = await page.locator("body").inner_text(timeout=3000) if await page.locator("body").count() else ""
+            problem = page_problem(page.url, text)
+            hostname = urlsplit(page.url).hostname
+            # Only wait on the platform's own verification page; do not interact
+            # with challenges, reload, or start a search while it is present.
+            if hostname == "safe.liepin.com" and self.scraper_cfg.get("manual_login_handoff"):
+                login_observations = 0
+                if not waiting_for_verification and self.on_progress:
+                    self.on_progress("猎聘要求安全验证，请在当前浏览器中手动完成；程序暂停搜索，等待返回登录页或首页。")
+                waiting_for_verification = True
+                await asyncio.sleep(2)
                 continue
-
-        console.print("[yellow]超时，请确认已登录后按Enter...[/]")
-        input()
+            waiting_for_verification = False
+            if problem and "登录已失效" not in problem:
+                await self._check_page(page)
+            if hostname != "h.liepin.com" and not problem:
+                raise ScrapeNeedsAttention("登录页面离开预期站点，请人工确认浏览器状态。")
+            logged_in = not problem and (
+                await page.locator(selectors).first.is_visible()
+                or await page.get_by_role("link", name="安全退出", exact=True).first.is_visible()
+                or await page.locator('a[href="/certification/home/"], a[href="/certification/home"]').first.is_visible()
+            )
+            login_observations = login_observations + 1 if logged_in else 0
+            if login_observations >= 2:
+                return
+            await asyncio.sleep(2)
+        raise ScrapeNeedsAttention("未确认登录成功。请完成登录后点击重新继续，已保存数据不会丢失。")
 
     async def _setup_search(self, page: Page):
         """进入搜索页，填写搜索条件（仅非 CDP 模式使用）"""
         console.print("[bold]进入简历搜索...[/]")
         await page.goto(self.SEARCH_URL, wait_until="domcontentloaded")
         await human_delay(1.5, 3.0)
-        await page.screenshot(path=str(self.screenshot_dir / "search_page.png"))
+        await self._check_page(page)
 
         try:
             await page.wait_for_load_state('networkidle', timeout=15000)
@@ -819,11 +914,8 @@ class LiepinHunterScraper:
             pass
         await human_delay(1.0, 2.0)
 
-        page_content = await page.content()
-        if len(page_content) < 500 or "about:blank" in page.url:
-            console.print("[yellow]⚠ 页面内容过少，可能被风控拦截[/]")
-            await page.reload(wait_until="domcontentloaded")
-            await human_delay(2.0, 4.0)
+        await self._check_page(page)
+        await self._observe_search_stability(page)
 
         keyword = self.search_cfg.get("keyword", "")
         search_mode = self.scraper_cfg.get("search_mode", "manual")
@@ -860,16 +952,10 @@ class LiepinHunterScraper:
 
         filled = await self._fill_keyword(page, keyword)
         if not filled:
-            console.print("[yellow]自动填入失败，切换到手动搜索模式[/]")
-            console.print("[yellow]请在浏览器中手动输入关键词并搜索[/]")
-            if is_cdp:
-                await self._wait_for_api_data(page)
-            else:
-                await self._wait_for_search_results(page)
-            return
-
-        # 自动按回车触发搜索
-        await human_delay(0.5, 1.0)
+            raise ScrapeNeedsAttention("未找到搜索输入框，页面结构可能变化，请检查页面后重新继续。")
+        # 提交前独立间隔并检查页面，避免等待期间状态改变。
+        await self.pacer.before_operation()
+        await self._check_page(page)
         console.print("[bold]按回车触发搜索...[/]")
 
         search_input = page.locator('.auto-input-wrap-v3 input[role="combobox"]').first
@@ -886,6 +972,8 @@ class LiepinHunterScraper:
             await self._wait_for_api_data(page)
         else:
             await self._wait_for_search_results(page)
+        if self.search_cfg.get("city"):
+            await self._select_city(page, self.search_cfg["city"])
 
     async def _fill_keyword(self, page: Page, keyword: str) -> bool:
         """往猎聘搜索框填入关键词（针对 Ant Design AutoComplete 优化）"""
@@ -907,8 +995,7 @@ class LiepinHunterScraper:
 
         try:
             # 1. 点击聚焦
-            await el.click()
-            await human_delay(0.2, 0.4)
+            await self.pacer.click(el, lambda: self._check_page(page))
 
             # 2. 全选清空
             await page.keyboard.press('Control+a')
@@ -953,53 +1040,30 @@ class LiepinHunterScraper:
         return False
 
     async def _select_city(self, page: Page, city: str):
-        """尝试在搜索页选择城市"""
-        try:
-            console.print(f"[bold]尝试选择城市: {city}[/]")
-
-            # 方式1: 点击城市选择器（常见选择器）
-            city_selectors = [
-                '[class*="city"] .ant-select',
-                '[class*="city-select"]',
-                '[class*="area-select"]',
-                '[class*="region"] .ant-select',
-                'div[class*="city"]',
-            ]
-
-            for sel in city_selectors:
-                try:
-                    el = page.locator(sel).first
-                    if await el.count() > 0 and await el.is_visible():
-                        await el.click()
-                        await human_delay(0.5, 1.0)
-
-                        # 在弹出的下拉框中搜索城市
-                        input_el = page.locator('.ant-select-dropdown input, .ant-select-search__field').first
-                        if await input_el.count() > 0:
-                            await input_el.fill(city)
-                            await human_delay(0.5, 1.0)
-
-                            # 点击匹配项
-                            option = page.locator(f'.ant-select-dropdown .ant-select-item:has-text("{city}")').first
-                            if await option.count() > 0:
-                                await option.click()
-                                console.print(f"[green]✓ 已选择城市: {city}[/]")
-                                await human_delay(0.5, 1.0)
-                                return
-                except Exception:
-                    continue
-
-            # 方式2: 用JavaScript直接设置（有些页面支持URL参数）
-            current_url = page.url
-            if '?' in current_url:
-                await page.goto(f"{current_url}&dq={city}", wait_until="domcontentloaded")
-            else:
-                await page.goto(f"{current_url}?dq={city}", wait_until="domcontentloaded")
-            await human_delay(2.0, 3.0)
-            console.print(f"[dim]已尝试通过URL参数设置城市: {city}[/]")
-
-        except Exception as e:
-            console.print(f"[yellow]城市选择失败({e})，使用默认[/]")
+        """Apply the observed current-city control; fail closed if unavailable."""
+        group = page.locator('.sfilter-city').filter(has_text='目前城市：')
+        if await group.count() != 1:
+            raise ScrapeNeedsAttention("未确认目前城市筛选控件，已停止以免采集错误地区。")
+        selected = group.locator('label.tag-item.selected')
+        if await selected.all_text_contents() == [city]:
+            return
+        unlimited = group.locator('.unlimited-btn')
+        if await selected.count():
+            await self.pacer.click(unlimited, lambda: self._check_page(page))
+        option = group.get_by_text(city, exact=True)
+        if await option.count() != 1 or not await option.is_visible():
+            raise ScrapeNeedsAttention("目标城市未出现在可见选项，请在页面中选择后继续。")
+        before = await self._page_marker(page)
+        await self.pacer.click(option, lambda: self._check_page(page))
+        for _ in range(20):
+            await asyncio.sleep(1)
+            await self._check_page(page)
+            after = await self._page_marker(page)
+            if await selected.all_text_contents() == [city] and after[1] and after != before:
+                if self.on_progress:
+                    self.on_progress(f"已确认目前城市：{city}，搜索列表已更新")
+                return
+        raise ScrapeNeedsAttention("未确认城市筛选和结果更新，已停止采集。")
 
     async def _wait_for_search_results(self, page: Page):
         """等待搜索结果出现（支持手动和自动两种模式）"""
@@ -1021,11 +1085,14 @@ class LiepinHunterScraper:
         elapsed = 0
 
         while elapsed < max_wait:
+            await self._check_page(page)
+            if await page.get_by_text("暂无相关简历", exact=False).count():
+                return
             for sel in result_selectors:
                 try:
                     cards = await page.query_selector_all(sel)
                     visible_cards = [c for c in cards if await c.is_visible()]
-                    if len(visible_cards) >= 2:
+                    if len(visible_cards) >= 1:
                         console.print(f"[green]✓ 检测到 {len(visible_cards)} 个简历卡片，开始抓取！[/]")
                         return
                 except Exception:
@@ -1044,7 +1111,7 @@ class LiepinHunterScraper:
             if elapsed % 30 == 0:
                 console.print(f"[dim]已等待 {elapsed} 秒，请在浏览器中完成搜索...[/]")
 
-        console.print("[yellow]⚠ 等待超时，尝试继续抓取当前页面...[/]")
+        raise ScrapeNeedsAttention("未能确认搜索结果，页面结构可能变化。请检查页面后重新继续。")
 
     async def _extract_basic_info(self, card) -> dict | None:
         """从简历卡片提取基础信息（修复：区分姓名和活跃度 + 检测已阅标记）"""
@@ -1075,10 +1142,10 @@ class LiepinHunterScraper:
                     let activity = '';
 
                     // 策略1：找 em 标签（通常是姓名加粗显示）
-                    const emEl = card.querySelector('em');
+                    const emEl = card.querySelector('.new-resume-personal-name em') || card.querySelector('em');
                     if (emEl) {
                         const emText = getText(emEl);
-                        if (emText && !emText.includes('活跃') && !emText.includes('天内') && !emText.includes('小时内')) {
+                        if (emText && emText !== '在线' && !emText.includes('活跃') && !emText.includes('天内') && !emText.includes('小时内')) {
                             name = emText;
                         }
                     }
@@ -1354,10 +1421,12 @@ class LiepinHunterScraper:
                 if not basic_info:
                     continue
 
-                # 跳过已阅简历
-                if basic_info.get('is_viewed'):
+                # 本地已保存才跳过，平台“已阅”不能证明已成功入库。
+                from .models import extract_resume_id
+                if extract_resume_id(basic_info) in self.seen_ids:
+                    self.duplicates_skipped += 1
                     skipped_viewed += 1
-                    console.print(f"  [{i+1}] {basic_info.get('name', '?')} - [dim]已阅，跳过[/]")
+                    console.print(f"  [{i+1}] {basic_info.get('name', '?')} - [dim]本地已保存，跳过[/]")
                     continue
 
                 all_cards_info.append((i, card, basic_info))
@@ -1398,7 +1467,23 @@ class LiepinHunterScraper:
         console.print(f"[bold]阶段2：抓取 {len(promising_cards)} 份简历详情...[/]")
 
         for idx, (i, card, basic_info) in enumerate(promising_cards):
+            detail_limit = self.scraper_cfg.get("detail_attempts_per_page")
+            if detail_limit is not None and idx >= detail_limit:
+                break
+            if len(self.results) >= self.scraper_cfg.get("max_results", 100):
+                break
             try:
+                # 详情若在同一标签打开，返回后旧 ElementHandle 已失效，重新定位。
+                current_cards = await page.query_selector_all('.tlog-common-resume-card')
+                if not current_cards:
+                    current_cards = await page.query_selector_all('[class*="resume-card"]')
+                if i >= len(current_cards):
+                    raise ScrapeNeedsAttention("返回后搜索列表发生变化，已保存结果保留，请重新继续。")
+                card = current_cards[i]
+                current_info = await self._extract_basic_info(card)
+                from .models import extract_resume_id
+                if not current_info or extract_resume_id(current_info) != extract_resume_id(basic_info):
+                    raise ScrapeNeedsAttention("搜索列表顺序发生变化，已停止以避免简历串人，请重新继续。")
                 name = basic_info.get('name', '?')
                 console.print(f"  [{i+1}] {name} - 正在进入详情页 ({idx+1}/{len(promising_cards)})...")
 
@@ -1406,25 +1491,11 @@ class LiepinHunterScraper:
                 pages_before = len(page.context.pages)
                 current_url = page.url
 
-                # 模拟点击卡片进入详情页
-                clicked = False
-                try:
+                name_el = await card.query_selector('.new-resume-personal-name em')
+                if not name_el:
                     name_el = await card.query_selector('em')
-                    if name_el and await name_el.is_visible():
-                        await name_el.click()
-                        clicked = True
-                        console.print(f"    [dim]点击姓名元素[/]")
-                except Exception:
-                    pass
-
-                if not clicked:
-                    try:
-                        await card.click()
-                        clicked = True
-                        console.print(f"    [dim]点击卡片[/]")
-                    except Exception as e:
-                        console.print(f"    [yellow]点击失败: {e}[/]")
-                        continue
+                target = name_el if name_el and await name_el.is_visible() else card
+                await self.pacer.click(target, lambda: self._check_page(page))
 
                 await human_delay(1.0, 2.0)
 
@@ -1455,8 +1526,9 @@ class LiepinHunterScraper:
                     await new_page.wait_for_load_state('networkidle', timeout=8000)
                 except Exception:
                     pass
-                await human_delay(0.5, 1.5)
+                await self.pacer.pause("detail")
 
+                await self._check_page(new_page)
                 full_text = await new_page.evaluate("""
                     () => {
                         const body = document.body;
@@ -1468,10 +1540,14 @@ class LiepinHunterScraper:
                 """)
 
                 if full_text and len(full_text) > 100:
-                    basic_info['full_text'] = full_text[:8000]
+                    basic_info['full_text'] = full_text
                     basic_info['detail_url'] = new_page.url
-                    resumes.append(basic_info)
-                    console.print(f"    [green]✓ 抓取成功 ({len(full_text)}字)[/]")
+                    if self._record_resume(basic_info):
+                        resumes.append(basic_info)
+                        console.print(f"    [green]✓ 抓取成功 ({len(full_text)}字)[/]")
+                    else:
+                        self.duplicates_skipped += 1
+                        console.print("    [dim]详情标识已保存，未重复写入[/]")
                 else:
                     console.print(f"    [yellow]详情页内容太少 ({len(full_text)}字)，跳过[/]")
 
@@ -1481,53 +1557,67 @@ class LiepinHunterScraper:
                         await new_page.close()
                     except Exception:
                         pass
-                    try:
-                        await page.bring_to_front()
-                    except Exception:
-                        pass
+                    await page.bring_to_front()
+                else:
+                    await page.go_back(wait_until="domcontentloaded")
+                    await self._check_page(page)
 
-                await between_cards_delay()
+                await self._check_page(page)
+                if full_text and len(full_text) > 100:
+                    self.details_completed += 1
+                await self.pacer.pause("between")
+                await self._check_page(page)
 
+            except ScrapeNeedsAttention:
+                raise
             except Exception as e:
                 error_msg = str(e)
                 if "closed" in error_msg.lower() or "Target page" in error_msg:
                     console.print(f"  [{i+1}] [red]抓取失败：浏览器已关闭，停止抓取[/]")
-                    break
+                    raise ScrapeNeedsAttention("采集浏览器已关闭，已保存结果保留。请重新继续。") from e
+                if self.scraper_cfg.get("require_detail"):
+                    raise ScrapeNeedsAttention("详情打开或返回搜索页未完成，最短流程尚未通过。") from e
                 console.print(f"  [{i+1}] [red]抓取失败：{error_msg}[/]")
                 continue
 
         console.print(f"[green]本轮抓取完成: {len(resumes)}/{len(all_cards_info)} 份简历入库[/]")
         return resumes
 
+    async def _page_marker(self, page):
+        active = page.locator('li.ant-pagination-item-active').first
+        number = await active.inner_text() if await active.count() else ""
+        cards = page.locator('.tlog-common-resume-card')
+        if not await cards.count():
+            cards = page.locator('[class*="resume-card"]')
+        # Kept in memory only; never log candidate text.
+        first = await cards.first.inner_text() if await cards.count() else ""
+        return number.strip(), first
+
     async def _go_next_page(self, page: Page) -> bool:
-        """翻到下一页"""
-        try:
-            # 猎聘的翻页按钮
-            next_selectors = [
-                '[class*="next"]',
-                '[class*="pagination"] .next',
-                'li.ant-pagination-next',
-                'button.ant-pagination-next',
-                'a:has-text("下一页")',
-            ]
-
-            for sel in next_selectors:
-                try:
-                    btn = page.locator(sel).first
-                    if await btn.count() > 0 and await btn.is_visible():
-                        # 检查是否禁用
-                        is_disabled = await btn.get_attribute('disabled')
-                        cls = await btn.get_attribute('class') or ''
-                        if is_disabled or 'disabled' in cls:
-                            return False
-                        await btn.click()
-                        return True
-                except Exception:
-                    continue
-
-            return False
-        except Exception:
-            return False
+        """Click one pagination control and verify the rendered page changed."""
+        await self._check_page(page)
+        before = await self._page_marker(page)
+        selectors = ('li.ant-pagination-next', 'button.ant-pagination-next',
+                     '[class*="pagination"] .next', 'a:has-text("下一页")')
+        for selector in selectors:
+            btn = page.locator(selector).first
+            if not await btn.count() or not await btn.is_visible():
+                continue
+            if (await btn.get_attribute('disabled') is not None
+                    or await btn.get_attribute('aria-disabled') == 'true'
+                    or 'disabled' in (await btn.get_attribute('class') or '')):
+                return False
+            await self.pacer.click(btn, lambda: self._check_page(page))
+            deadline = asyncio.get_running_loop().time() + 20
+            while asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(1)
+                await self._check_page(page)
+                after = await self._page_marker(page)
+                if after[1] and after[1] != before[1] and (not before[0] or after[0] != before[0]):
+                    console.print("[green]已确认下一页列表更新[/]")
+                    return True
+            raise ScrapeNeedsAttention("点击下一页后未确认列表更新，已停止以避免重复采集。")
+        return False
 
     def _save_results(self):
         """保存结果到文件"""

@@ -1,11 +1,19 @@
 # 明猎 · Recruiter-MingLie
 
-面向猎头与招聘方的 AI 招聘自动化工作台。
+面向猎头与招聘方的 AI 招聘助手，用一句话发起搜寻与匹配。
 
 把「拿到岗位 → 找候选人 → 判断合不合适 → 推荐给甲方」这条链路尽量自动化：
 从猎聘抓取候选人简历，用大模型按岗位要求打分，再把合格的人整理成一份可直接发出的推荐报告。
 
 项目同时提供两种使用方式：浏览器内的 **Chrome 扩展**（贴着猎聘页面干活）和完整的 **网页工作台**（管理岗位、候选人、报告）。
+
+网页默认进入招聘助手。例如输入「帮我找深圳的半导体销售总监，先收集 10 份简历，无其他要求」，助手规划并调用自动采集、分析和推荐工具；无需逐页建岗位、填搜索参数。模型服务与平台登录准备好后才可实际执行，遇到平台验证会提示处理并保留已采集结果。
+
+首次进入会显示可跳过的开始指南，带你接入模型、了解平台登录并填写第一条需求；右上角可随时重新打开。指南进度按账号保存，新账号从自己的招聘需求建立项目。概览项目卡展示实际简历与分析数量，以及下一步入口。
+
+助手页把对话、实际执行阶段、收集数量与推荐卡放在一起，支持切页后恢复本轮进展和草稿。概览、候选人、面试、报告用于查看成果与跟进；独立搜寻与分析保留在“工作详情”。浅蓝、紫色与少量暖色搭配 Aurora 渐变、连线追光、悬浮卡片和执行波形，支持减少动态效果偏好。
+
+客户只表达岗位、城市、份数和实际要求；评分模式、翻页上限等执行参数内置。“设置 → 模型服务”支持 DeepSeek、OpenAI、通义千问、Moonshot、SiliconFlow 与自定义 OpenAI 兼容接口。报告用可展开的评估卡呈现依据，未分析简历明确标记为“未分析”。设计与验收说明见 [前端工作台](docs/frontend-workspace.md)。
 
 ---
 
@@ -76,7 +84,8 @@ WorkSpace/
 ├─ tests/                       ★ pytest 测试（鉴权 / 报告 / 解析 / Web / 架构约束）
 ├─ scripts/smoke_test.py        ★ 启动冒烟测试：真跑一遍服务
 ├─ templates/                   网页工作台的 13 个页面
-├─ static/css/style.css         页面样式
+├─ static/css/                  基础样式、工作台主题与登录页样式
+├─ static/js/workspace.js        快捷导航、状态保留与交互增强
 ├─ config/report_templates/     推荐报告模板（headhunter_v1.yaml）
 ├─ chrome-extension/            Chrome MV3 扩展
 ├─ data/                        运行时数据（不入库）
@@ -91,15 +100,19 @@ WorkSpace/
 
 用 Playwright 驱动真实浏览器，登录猎聘猎头端（h.liepin.com），按关键词搜索候选人，自动翻页、提取简历卡片、进入详情页抓取完整信息。
 
-支持三种浏览器启动模式：
+支持以下浏览器会话模式：
 
 | 模式 | 做法 | 特点 |
 |---|---|---|
-| `cdp` | 连接一个已启动的 Chrome 调试端口，WebSocket 直连 | 最难被识别为脚本，**推荐** |
-| `stealth` | 用反检测参数启动 + 复用真实浏览器的登录数据 | 无需手动开浏览器 |
-| `basic` | 纯 Playwright 启动 | 最弱，容易触发风控 |
+| `browser` | 标准 Playwright 独立用户目录 | 当前默认模式 |
+| `scrapling` + `dynamic` | Scrapling 标准会话 | 本次实站登录前出现白屏 |
+| `scrapling` + `stealth` | Scrapling 的 Patchright 会话 | 已通过两页、各一份详情的有限实测 |
+| `cdp` | 旧版 CDP 手动搜索监听 | 不支持完整自动寻访 |
+| `stealth` / `basic` | 旧版浏览器实现 | 保留兼容，与 Scrapling stealth 不同 |
 
-配套 `anti_detect.py` 做反检测：随机延迟、模拟真人鼠标轨迹/滚动、操作节奏控制（`HumanPacer`）。
+使用新模式前安装 `requirements-scrapling.txt`，设置 `MINGLIE_SCRAPE_MODE=scrapling` 和 `MINGLIE_SCRAPLING_ENGINE=stealth`。首次在独立浏览器人工登录。页面空白或要求验证时停止采集，已写入的数据保留；任务可手动恢复。操作节奏控制不构成持续访问保证。
+
+详见 [安装与实站验收](docs/scrapling-validation.md) 和 [中断恢复](docs/collection-recovery.md)。两页实测与本地模拟模型的流程验证分别记录，不代表真实模型质量或长期批量采集已通过验收。
 
 ### 2. AI 评分（`analyzer.py` + `jd_analyzer.py`）
 
@@ -149,7 +162,9 @@ get_job_list            full_recruit            save_job_to_obsidian
 update_candidate_status get_pipeline            sync_pipeline_to_obsidian
 ```
 
-引导流程为 6 步：获取 JD → 分析 JD 并建岗位 → 确认后抓取评分 → 跟踪进展 → 推进到 offer/入职。
+用户明确提出找人，并提供岗位方向与城市时，助手可直接执行 `full_recruit`：解析需求 → 建立岗位 → 自动采集 → 分析 → 整理推荐。用户指定的份数会传到采集器；默认 10 份，上限 50 份，不擅自增加学历、年龄或年限要求。条件不足时只追问缺失项，讨论 JD 时不启动采集。已有项目可让助手查询并继续。
+
+网页使用 `/api/chat/run` 启动后台助手回合，同账号正在执行时禁止重复提交；切页后读取服务端状态与执行记录。当前对话和回合登记保存在单进程内存中，服务重启后不恢复，多个 Web worker 也不共享；已保存岗位、简历与采集/评分任务仍在数据库。采集等待超时或需要验证时暂停本轮后续分析，可查看任务并在完成后让助手继续。
 
 `agent_memory.py` 会从用户的反馈（比如「这个人淘汰了，原因是……」）里提炼经验，供后续评分参考。
 
@@ -169,7 +184,7 @@ Manifest V3 扩展，以侧边栏为主界面，直接贴在猎聘页面上使�
 
 - **后端**：Python 3.12、Flask 3.1、Flask-Login、Flask-CORS
 - **数据库**：SQLite（`data/minglie.db`）
-- **前端**：Jinja2 模板 + 原生 CSS
+- **前端**：Jinja2 模板 + 原生 CSS / JavaScript，无额外 React 构建依赖
 - **浏览器自动化**：Playwright、playwright-stealth
 - **大模型调用**：OpenAI SDK / httpx，兼容 DeepSeek 等接口
 - **文档处理**：python-docx、pdfplumber、PyMuPDF、reportlab、weasyprint
@@ -342,9 +357,9 @@ python scripts/smoke_test.py      # 启动冒烟测试（真跑一遍服务）
 
 仓库早期还有一套 `MingLie2.0/` 的完整分层重写（`domain/`、`repositories/`、`services/`、`orchestration/`，带 `tests/test_workbench.py`），后来被整体删除，当前版本是另一条路线。这个决定当时没有留下文字记录，只存在于提交历史里 —— 这里补记一笔，免得后来者对着 `git log` 猜。
 
-### 本次未改动的部分
+### 后续采集更新
 
-**猎聘抓取能力完整保留。** `scraper_liepin.py`（20 个方法）与 `anti_detect.py` 的业务逻辑一行未改：三种启动模式（`cdp` / `stealth` / `basic`）、翻页、详情抓取、快速筛选、CSV+JSON 落盘的行为与重构前一致，只是配置来源改为从 `app/config.py` 取（由 `tests/test_architecture.py` 断言守住）。
+在上述架构重构之后，采集器新增了可选 Scrapling 会话、逐条持久化、待人工处理状态和任务恢复；翻页增加列表更新检查。评分保留低分原始资料。当前真实采集结果以验收文档为准，JSON 文件和浏览器登录资料留在本地，不进入 Git。
 
 ---
 

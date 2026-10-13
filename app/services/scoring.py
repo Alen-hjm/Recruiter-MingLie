@@ -3,12 +3,12 @@
 简历评分后台任务。
 
 保留能力：知识库上下文增强、知识引擎上下文、历史评分合并、只评新简历、
-并发评分、低于阈值的简历自动清理、评分后自动录入候选人管道并同步 Obsidian。
+并发评分、保留低分原始简历、评分后自动录入候选人管道并同步 Obsidian。
 
 改进点：
   1. 不再从 server 导入 —— 解开了 agent_tools ↔ server 的循环依赖。
   2. LLM 配置统一走 config.resolve_llm_config（环境变量可作兜底）。
-  3. 并发度、低分阈值提为模块常量，方便按机器性能调整。
+  3. 并发度提为模块常量，方便按机器性能调整。
 """
 
 import json
@@ -20,7 +20,6 @@ from pathlib import Path
 from ..models import (
     create_candidate_from_score,
     create_score_task,
-    delete_low_score_resumes,
     extract_resume_id,
     get_candidates_by_stage,
     get_db,
@@ -32,9 +31,6 @@ from ..models import (
 
 # 评分并发度。太低拖慢批量，太高会撞到 LLM 侧限流。
 SCORE_MAX_WORKERS = 5
-
-# 低于这个分数的简历在评分后会被自动清理
-LOW_SCORE_THRESHOLD = 60
 
 # 达到这个分数的候选人自动进入管道
 PIPELINE_MIN_SCORE = 60
@@ -182,19 +178,8 @@ def run_score_task(task_id: int, score_config: dict, resumes: list,
         all_scored = existing_scored + [r for r in scored_new if r is not None]
         passed = sum(1 for r in all_scored if (r.get("score100") or {}).get("pass", False)) if mode == "100" else 0
 
-        # ── 低分清理 ──
-        deleted_count = 0
-        if user_id and job_id:
-            try:
-                deleted_count = delete_low_score_resumes(user_id, job_id, threshold=LOW_SCORE_THRESHOLD)
-                if deleted_count:
-                    print("[自动清理] 已删除 %d 份低于 %d 分的简历" % (deleted_count, LOW_SCORE_THRESHOLD))
-            except Exception as e:
-                print("[自动清理失败] %s" % e)
-
+        # 自动分析保留全部原始简历；低分只影响分类，不删除人才资料。
         notes = []
-        if deleted_count:
-            notes.append("已自动删除 %d 份低分简历" % deleted_count)
         if existing_scored:
             notes.append("（合并已有评分 %d 份）" % len(existing_scored))
 

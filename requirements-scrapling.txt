@@ -1,0 +1,3 @@
+# Optional transport; install alongside requirements.txt.
+# Pin because callback/error behavior is part of the adapter contract.
+scrapling[fetchers]==0.4.15

@@ -2,8 +2,8 @@
 """架构约束测试：把「已经修好的依赖方向」钉死，防止以后被改回去。"""
 
 import ast
-import importlib
 import pathlib
+import subprocess
 import sys
 
 
@@ -62,15 +62,14 @@ def test_agent_tools_importable_without_flask_app():
     agent_tools 必须能在不启动 Flask 应用的情况下导入。
     重构前这是做不到的（import 它会把 server 连带拉起）。
     """
-    for name in list(sys.modules):
-        if name.startswith("app."):
-            del sys.modules[name]
-
-    importlib.import_module("app.agent_tools")
-
-    loaded = [m for m in sys.modules if m.startswith("app.")]
-    assert "app.web" not in loaded, "导入 agent_tools 不应加载 web 层"
-    assert not any(m.startswith("app.services") for m in loaded) or True
+    # 独立解释器保证冷启动，同时避免破坏其他测试持有的模块引用。
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; import app.agent_tools; "
+         "assert 'app.web' not in sys.modules, 'agent_tools loaded web layer'"],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_scraper_still_present():

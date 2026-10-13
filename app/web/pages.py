@@ -57,6 +57,12 @@ def logout():
 @bp.route("/")
 @login_required
 def dashboard():
+    return render_template("agent.html")
+
+
+@bp.route("/overview")
+@login_required
+def overview_page():
     return render_template("dashboard.html")
 
 

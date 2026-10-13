@@ -1,0 +1,70 @@
+/* Local motion: a responsive surface, then a meaningful response to each action. */
+.motion-card{position:relative;isolation:isolate;transform:perspective(1000px) rotateX(var(--tilt-x,0deg)) rotateY(var(--tilt-y,0deg));transition:transform .32s ease,box-shadow .32s ease,border-color .25s ease}
+.motion-card:after{content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:radial-gradient(280px circle at var(--spot-x,50%) var(--spot-y,50%),#a1b9ef26,transparent 75%);opacity:0;transition:opacity .3s}
+.motion-card.motion-hover,.motion-card:focus-within{border-color:#b5b9e5;box-shadow:0 14px 30px -15px #667ac650}
+.motion-card.motion-hover:after,.motion-card:focus-within:after{opacity:1}
+.assistant-person.motion-card{animation:none}
+.assistant-landing:after{content:'';position:absolute;inset:0;z-index:0;pointer-events:none;background:radial-gradient(260px circle at var(--spot-x,70%) var(--spot-y,50%),#fff9,transparent 80%);opacity:0;transition:opacity .5s}
+.assistant-landing.motion-hover:after{opacity:1}
+.talent-bridge,.talent-art,.intro-glyph{translate:var(--drift-x,0px) var(--drift-y,0px);transition:translate .45s cubic-bezier(.2,.8,.2,1)}
+.assistant-stage{container-type:inline-size}
+.talent-bridge{z-index:1;opacity:.94;width:330px;right:12px;top:12px;scale:.72;transform-origin:right center}
+@container(min-width:720px){.talent-bridge{scale:.9;right:16px}}
+@container(min-width:900px){.talent-bridge{scale:1;right:26px}}
+.bridge-beam{stroke-width:2.3;stroke-dasharray:35 150;animation-duration:5s}
+.bridge-base{stroke:#acb9da70}
+.bridge-core:after{content:'';position:absolute;inset:-8px;border-radius:50%;border:1px solid #a99cde70;animation:core-ripple 3.5s ease-out infinite}
+.bridge-note{box-shadow:0 12px 28px #7786ae18;animation-duration:5s}
+.assistant-landing.motion-hover .bridge-note{border-color:#c8c8ec}
+.intro-glyph span{transition:transform .55s cubic-bezier(.2,.8,.2,1),background .3s}
+.page-intro.motion-hover .intro-glyph span:first-child{transform:translateX(-40px) rotate(-28deg)}
+.page-intro.motion-hover .intro-glyph span:nth-child(2){transform:translateX(40px) rotate(28deg)}
+.page-intro.motion-hover .intro-glyph span:nth-child(3){transform:translateY(-8px);background:#ffffffa6}
+.intro-glyph b{transition:transform .6s cubic-bezier(.2,.8,.2,1)}
+.page-intro.motion-hover .intro-glyph b{transform:translateY(-8px) rotate(-8deg)}
+.assistant-send{position:relative;overflow:hidden;isolation:isolate;transition:box-shadow .25s,background .25s;box-shadow:0 5px 15px #7985bc28}
+.assistant-send:before{content:'';position:absolute;inset:-90% -40%;pointer-events:none;background:linear-gradient(115deg,transparent 38%,#ffffff55 49%,transparent 60%);transform:translateX(-90%);transition:transform .65s ease}
+.assistant-send:not(:disabled):hover:before,.assistant-send:focus-visible:before{transform:translateX(90%)}
+.assistant-send>span{translate:var(--magnet-x,0px) var(--magnet-y,0px);transition:translate .25s cubic-bezier(.2,.8,.2,1)}
+.assistant-send:not(:disabled):hover{box-shadow:0 8px 22px #7a6bc14d}
+.assistant-send:not(:disabled):active>span{scale:.94}
+.is-working .assistant-send .send-arrow{font-size:0;position:relative;width:18px;height:18px;border:1.5px solid #ffffff55;border-top-color:#fff;border-radius:50%;animation:motion-spin .9s linear infinite}
+.assistant-composer:focus-within{box-shadow:0 0 0 4px #ae9de61a,0 14px 35px #8b85ca1c;translate:0 -2px}
+.assistant-composer{transition:translate .3s,border-color .25s,box-shadow .3s}
+.assistant-examples button{transition:translate .25s,box-shadow .25s,border-color .25s}
+.assistant-examples button:hover,.assistant-examples button:focus-visible{translate:0 -3px;box-shadow:0 7px 18px #839ac51c}
+.assistant-examples button span{display:inline-block;transition:transform .25s}
+.assistant-examples button:hover span{transform:translate(2px,-2px)}
+.mission-node{position:relative;transition:background .4s,border-color .4s,box-shadow .4s}
+.assistant-space .mission-steps li.current .mission-node{background:linear-gradient(135deg,#e9edff,#f1e6ff);border-color:#b6a4e3;color:#8467b9;box-shadow:0 0 0 5px #a88bd514}
+.mission-steps li.current .mission-node:before{content:'';position:absolute;inset:-6px;border:1px solid #a38ad8;border-radius:18px;animation:phase-halo 2s ease-out infinite}
+.mission-steps li.current .mission-node svg{animation:phase-breathe 2s ease-in-out infinite}
+.assistant-space .mission-steps li.current:before{background:linear-gradient(#dce2f1,#ac8fd8,#dce2f1);background-size:100% 200%;animation:phase-scan 1.6s linear infinite}
+.assistant-space .mission-steps li.completed:before{background:#b7c7ee}
+.mission-steps li.completed .phase-order{color:#7891bf}
+.mission-steps li.completed .mission-node:after{animation:check-land .4s cubic-bezier(.2,.8,.2,1)}
+.mission-panel{transition:box-shadow .5s,border-color .5s}
+[data-run-status=running] .mission-panel{border-color:#c7bee7;box-shadow:0 8px 38px #a290cf16}
+[data-run-status=done] .mission-live{background:#e8eefb;color:#637eae}
+.mission-counts strong{font-variant-numeric:tabular-nums}
+.start-kit-grid{position:relative;isolation:isolate}
+.setup-hover{position:absolute;top:0;left:0;z-index:-1;pointer-events:none;border-radius:14px;border:1px solid #dfe5f7;background:linear-gradient(120deg,#ecf2ff,#f4edfc);opacity:0;transition:transform .35s cubic-bezier(.2,.8,.2,1),width .35s,height .25s,opacity .2s}
+.start-kit-grid.has-hover .setup-hover{opacity:1}
+.start-kit-number{transition:transform .35s,box-shadow .35s}
+.start-kit-step:hover .start-kit-number,.start-kit-step:focus-within .start-kit-number{transform:translateY(-3px) rotate(-7deg);box-shadow:0 6px 12px #b5b9da30}
+.nav-icon{display:inline-block;transition:transform .3s}
+.nav-item:hover .nav-icon,.nav-item:focus-visible .nav-icon{transform:translateY(-2px) rotate(-8deg)}
+.route-card>span:last-child{transition:transform .25s}.route-card:hover>span:last-child{transform:translate(4px,-3px)}
+.motion-offscreen *,.motion-offscreen:before,.motion-offscreen:after,.motion-offscreen *:before,.motion-offscreen *:after,.motion-paused *,.motion-paused *:before,.motion-paused *:after{animation-play-state:paused!important}
+@keyframes motion-spin{to{transform:rotate(360deg)}}
+@keyframes phase-halo{0%{scale:.9;opacity:.7}100%{scale:1.2;opacity:0}}
+@keyframes phase-breathe{50%{transform:translateY(-2px)}}
+@keyframes phase-scan{to{background-position:0 200%}}
+@keyframes core-ripple{0%{scale:.9;opacity:.65}80%,100%{scale:1.8;opacity:0}}
+@keyframes check-land{from{scale:.45;opacity:0}70%{scale:1.15}to{scale:1;opacity:1}}
+@media(prefers-reduced-motion:reduce){
+  .motion-card,.talent-bridge,.talent-art,.intro-glyph,.assistant-send>span,.assistant-composer,.assistant-examples button{transform:none!important;translate:none!important;transition:none!important}
+  .motion-card:after,.assistant-landing:after,.setup-hover,.intro-glyph span,.intro-glyph b,.nav-icon,.start-kit-number{transition:none!important}
+  .bridge-core:after,.mission-steps li.current .mission-node:before{display:none}
+  .is-working .assistant-send .send-arrow{animation:none!important}
+}

@@ -22,60 +22,25 @@ SYSTEM_PROMPT = """你是明猎 AI 招聘助手。你的任务是帮助用户完
 
 当用户说要招人时，按以下流程引导：
 
-### 第一步：获取 JD
+### 第一步：理解一句话需求
 
-如果用户只说了岗位名称（如“招一个半导体销售”），先问：
-```
-收到！请问你有详细的岗位描述（JD）吗？
+用户明确表示“找人”“招人”“搜寻”，且提供岗位方向和城市时，直接调用 full_recruit。
+例如“帮我找深圳半导体销售总监，先收集10份简历，无其他要求”，无需先索取详细 JD 或重复确认。
+把用户原话写入 job_description，明确保留城市、岗位和数量；max_results 传入用户指定的份数，未指定默认10份，上限50份。
+不要擅自增加学历、年龄、年限、公司背景等硬性限制。缺少岗位或城市等关键信息时，只询问缺少的条件。
+用户只要求讨论岗位、修改条件或分析 JD 时，不启动搜寻。询问、建议、尚未执行的计划和已经完成的操作必须区分。
 
-1️⃣ 有 → 请直接贴给我
-2️⃣ 没有 → 我来根据行业经验帮你生成
-```
+### 第二步：自动执行搜寻与分析
 
-### 第二步：分析 JD + 创建岗位
+full_recruit 串联创建岗位、搜寻简历、分析和推荐。内部执行参数无需用户选择。
+如果已有对应项目，先 get_job_list 查询并优先继续该项目，避免重复创建。
+使用独立工具继续时，先 scrape_resumes，确实完成后再 score_resumes，最后 get_candidates。
+出现平台验证、任务未完成、配置不足或执行失败时，明确告知停在哪一步，不能声称已经招到人或完成评分。
 
-1. 调用 analyze_jd 分析 JD
-2. 调用 create_job 创建岗位
-3. **必须在 reply 中完整展示分析结果**
+### 第三步：交付可核实的人选
 
-展示格式：
-```
-📋 岗位名称
-
-【硬需求】
-- xxx
-- xxx
-
-【软需求】
-- xxx
-
-【加分项】
-- xxx
-
-【搜索关键词】xxx
-【城市】xxx
-
-以上需求是否准确？确认后我将开始爬取简历。
-```
-
-### 第三步：确认后爬取 + 评分
-
-用户说“确认”“开始”等 → 执行 scrape_resumes + score_resumes
-
-评分完成后，系统会自动：
-- 将推荐候选人（≥80分）录入候选人管道
-- 同步到 Obsidian 岗位笔记
-
-展示结果：
-```
-✅ 爬取完成！
-📄 爬取简历：X份
-🟢 推荐面试（≥80分）：X人
-🟡 待定（60-80分）：X人
-🔴 已淘汰（<60分）：X人
-
-候选人已进入管道，可以开始打电话了！
-```
+回复包含实际收集份数、分析情况和推荐理由。推荐仅意味着值得进一步沟通，不代表候选人同意或已经录用。
+自动同步知识库仅在用户已配置连接时执行。不要因可选知识库未配置而要求用户手动配置才能搜寻。
 
 ### 第四步：跟踪招聘进展
 
@@ -92,8 +57,7 @@ SYSTEM_PROMPT = """你是明猎 AI 招聘助手。你的任务是帮助用户完
 
 ### 第五步：同步到 Obsidian
 
-每次状态变更后，自动调用 sync_pipeline_to_obsidian 同步到 Obsidian。
-这样用户的 Obsidian 岗位笔记里就有完整的招聘过程记录。
+仅在已连接 Obsidian 时，同步已记录的招聘进展。未配置知识库不影响招聘主流程。
 
 ### 第六步：学习闭环
 
@@ -131,10 +95,10 @@ SYSTEM_PROMPT = """你是明猎 AI 招聘助手。你的任务是帮助用户完
 询问用户时，steps 为空数组：
 ```json
 {{
-    "thinking": "需要用户提供JD",
+    "thinking": "需要补充城市",
     "steps": [],
-    "reply": "收到！请问你有详细的岗位描述（JD）吗？\n\n1️⃣ 有 → 请直接贴给我\n2️⃣ 没有 → 我来根据行业经验帮你生成",
-    "summary": "等待用户提供JD"
+    "reply": "这个岗位希望在哪个城市寻找？",
+    "summary": "等待补充工作城市"
 }}
 ```"""
 
@@ -245,17 +209,20 @@ async def plan_steps(
                 except json.JSONDecodeError:
                     pass
             
-            # 方法4：全部失败，返回一个默认结构
+            # A broken plan must not be reported as a successful conversation.
             return {
+                "success": False,
+                "error": "模型未返回有效的执行计划，请重试或检查模型服务。",
                 "thinking": "LLM 返回格式异常",
                 "steps": [],
-                "summary": content,
-                "reply": content,
+                "reply": "模型未返回有效的执行计划，本次没有启动搜寻。",
             }
 
     except Exception as e:
         print(f"[Agent] 规划失败: {e}")
         return {
+            "success": False,
+            "error": str(e),
             "thinking": f"规划失败: {str(e)}",
             "steps": [],
             "summary": "抱歉，我暂时无法处理这个请求。",
@@ -267,6 +234,7 @@ async def run_agent(
     user_id: int,
     goal: str,
     history: list[dict] = None,
+    on_progress=None,
 ) -> dict:
     """
     Agent 主入口
@@ -274,10 +242,9 @@ async def run_agent(
     """
     from .models import get_settings
 
-    settings = get_settings(user_id)
-    api_key = settings.get("llm_api_key", "")
-    base_url = settings.get("llm_base_url", "https://api.deepseek.com")
-    model = settings.get("llm_model", "deepseek-chat")
+    from .config import resolve_llm_config
+    llm = resolve_llm_config(get_settings(user_id) or {})
+    api_key, base_url, model = llm["api_key"], llm["base_url"], llm["model"]
 
     if not api_key:
         return {"success": False, "error": "请先配置 LLM API Key"}
@@ -286,6 +253,17 @@ async def run_agent(
 
     # ── Step 1: 规划（带记忆上下文）──
     plan = await plan_steps(goal, history, api_key, base_url, model, user_id=user_id)
+
+    if not isinstance(plan, dict) or plan.get("success") is False:
+        return {"success": False, "results": [],
+                "error": plan.get("error", "模型执行计划无效") if isinstance(plan, dict) else "模型执行计划无效",
+                "summary": plan.get("reply", "本次没有启动搜寻，请重试。") if isinstance(plan, dict) else "本次没有启动搜寻，请重试。"}
+    steps = plan.get("steps", [])
+    if not isinstance(steps, list) or any(
+        not isinstance(step, dict) or not isinstance(step.get("params", {}), dict)
+        for step in steps
+    ):
+        return {"success": False, "results": [], "error": "模型执行计划格式无效，本次没有启动搜寻。"}
 
     # 如果只是聊天，直接返回回复
     if plan.get("reply") and not plan.get("steps"):
@@ -307,7 +285,7 @@ async def run_agent(
         }
 
     # ── Step 2: 逐步执行 ──
-    executor = ToolExecutor(user_id)
+    executor = ToolExecutor(user_id, on_progress=on_progress)
     results = []
     context = {}  # 存储中间结果，供后续步骤使用
 
@@ -315,6 +293,11 @@ async def run_agent(
         tool_name = step.get("tool", "")
         params = step.get("params", {})
         description = step.get("description", "")
+        if on_progress:
+            phases = {"analyze_jd": "understanding", "create_job": "understanding",
+                      "scrape_resumes": "searching", "score_resumes": "evaluating",
+                      "get_candidates": "recommending", "full_recruit": "understanding"}
+            on_progress(phase=phases.get(tool_name, "working"), label=description or "处理招聘需求")
 
         print(f"[Agent] 执行步骤 {i+1}/{len(steps)}: {tool_name} - {description}")
 
@@ -351,6 +334,8 @@ async def run_agent(
 
         # 执行工具
         result = await executor.execute(tool_name, params)
+        if on_progress and result.get("success") and tool_name in phases:
+            on_progress(completed_phase=phases[tool_name])
         results.append({
             "step": i + 1,
             "tool": tool_name,
@@ -362,7 +347,7 @@ async def run_agent(
         context[f"step{i+1}"] = result
 
         # 如果失败且是关键步骤，停止执行
-        if not result.get("success") and tool_name in ("create_job", "scrape_resumes"):
+        if not result.get("success") and tool_name in ("create_job", "scrape_resumes", "score_resumes", "full_recruit", "get_candidates"):
             results.append({
                 "step": i + 1,
                 "tool": "error",
@@ -372,10 +357,12 @@ async def run_agent(
             break
 
     # ── Step 3: 生成总结 ──
+    if on_progress:
+        on_progress(phase="summarizing", label="整理执行结果")
     summary = await generate_summary(goal, plan, results, api_key, base_url, model)
 
     return {
-        "success": True,
+        "success": all(row.get("result", {}).get("success", False) for row in results),
         "plan": plan,
         "results": results,
         "summary": summary,

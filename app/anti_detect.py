@@ -102,37 +102,8 @@ async def scroll_to_element(page, selector: str):
 # 4. 操作节奏控制 —— 避免太规律
 # ============================================================
 
-class HumanPacer:
-    """控制整体操作节奏，加入随机休息和停顿（提速版）"""
-
-    def __init__(self):
-        self.operation_count = 0
-        self.session_start = asyncio.get_event_loop().time()
-
-    async def before_operation(self):
-        """每次操作前调用"""
-        self.operation_count += 1
-
-        # 每操作 8-20 次，随机休息 2-5 秒
-        if self.operation_count % random.randint(8, 20) == 0:
-            rest = random.uniform(2, 5)
-            print(f"  [pace] 休息 {rest:.1f}s...")
-            await asyncio.sleep(rest)
-
-        # 每操作 30-50 次，长休息 5-15 秒
-        if self.operation_count % random.randint(30, 50) == 0:
-            rest = random.uniform(5, 15)
-            print(f"  [pace] 长休息 {rest:.1f}s...")
-            await asyncio.sleep(rest)
-
-    async def should_stop(self) -> bool:
-        """判断是否应该停止（避免一次性抓太多）"""
-        elapsed = asyncio.get_event_loop().time() - self.session_start
-        # 单次运行不超过30分钟
-        if elapsed > 1800:
-            print("  [pace] 运行超过30分钟，建议休息")
-            return True
-        return False
+# Kept as a compatibility name for existing callers.
+from .interaction_pacing import InteractionPacer as HumanPacer
 
 
 # ============================================================

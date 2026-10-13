@@ -1,186 +1,35 @@
 {% extends "base.html" %}
 {% set active = "interview" %}
-{% block title %}面试管理 - 明猎{% endblock %}
-
+{% block title %}面试跟进 - 明猎{% endblock %}
 {% block content %}
-<div class="topbar">
-    <div class="topbar-left">
-        <h1>面试管理</h1>
-        <p>管理已约面的候选人</p>
-    </div>
-</div>
-
-<!-- 统计 -->
-<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
-    <div class="card" style="text-align:center;padding:16px">
-        <div style="font-size:24px;font-weight:700;color:#6366f1" id="count-total">0</div>
-        <div style="font-size:12px;color:#666;margin-top:4px">总面试人数</div>
-    </div>
-    <div class="card" style="text-align:center;padding:16px">
-        <div style="font-size:24px;font-weight:700;color:#10b981" id="count-today">0</div>
-        <div style="font-size:12px;color:#666;margin-top:4px">今日安排</div>
-    </div>
-    <div class="card" style="text-align:center;padding:16px">
-        <div style="font-size:24px;font-weight:700;color:#f59e0b" id="count-pending">0</div>
-        <div style="font-size:12px;color:#666;margin-top:4px">待反馈</div>
-    </div>
-</div>
-
-<!-- 岗位筛选 -->
-<div style="margin-bottom:16px">
-    <select id="job-filter" class="form-input" style="width:200px" onchange="loadInterviews()">
-        <option value="">全部岗位</option>
-    </select>
-</div>
-
-<!-- 面试列表 -->
+<div class="topbar"><div class="topbar-left"><h1>面试跟进</h1><p>从沟通记录到反馈，推进每一次机会</p></div><a class="btn btn-default" href="/candidates">查看候选人 ↗</a></div>
+{% include 'page_intro.html' %}
+<div class="metric-strip interview-metrics"><div><strong id="count-total">0</strong><span>约面人选</span></div><div><strong id="count-today">0</strong><span>今日加入</span></div><div><strong id="count-pending">0</strong><span>尚未记录反馈</span></div></div>
+<div class="section-heading"><div><span class="eyebrow">CONVERSATION NOTES</span><h3>沟通与反馈</h3></div><select id="job-filter" class="form-select" onchange="loadInterviews()"><option value="">全部岗位</option></select></div>
 <div id="interview-list"></div>
-
-<!-- 反馈弹窗 -->
-<div id="feedback-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center">
-    <div class="card" style="width:500px;max-width:90vw;padding:24px">
-        <h3 style="margin:0 0 16px">面试反馈</h3>
-        <div style="margin-bottom:12px;color:#666" id="feedback-candidate-info"></div>
-        <div class="form-group">
-            <label class="form-label">面试结果</label>
-            <select id="feedback-result" class="form-input">
-                <option value="pass">通过</option>
-                <option value="reject">淘汰</option>
-                <option value="pending">待定</option>
-            </select>
-        </div>
-        <div class="form-group">
-            <label class="form-label">反馈详情</label>
-            <textarea id="feedback-reason" class="form-input" rows="4" placeholder="请输入面试反馈..."></textarea>
-        </div>
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
-            <button class="btn btn-default" onclick="closeFeedbackModal()">取消</button>
-            <button class="btn btn-primary" onclick="submitFeedback()">提交反馈</button>
-        </div>
-    </div>
-</div>
+<div class="modal-overlay" id="feedback-modal" style="display:none" onclick="if(event.target===this)closeFeedbackModal()"><div class="modal" style="max-width:500px"><div class="modal-header"><h3 class="modal-title">记录面试反馈</h3><button class="modal-close" onclick="closeFeedbackModal()" aria-label="关闭">×</button></div><p id="feedback-candidate-info" class="feedback-context"></p><div class="form-group"><label for="feedback-result" class="form-label">下一步</label><select id="feedback-result" class="form-select"><option value="pass">通过，推进推荐</option><option value="pending">待定，继续核实</option><option value="reject">未通过，归档</option></select></div><div class="form-group"><label class="form-label" for="feedback-reason">沟通记录</label><textarea id="feedback-reason" class="form-textarea" rows="4" placeholder="记录具体经历、待确认信息与下一步安排…"></textarea></div><div class="search-actions"><button class="btn btn-primary" id="feedback-submit" onclick="submitFeedback()">保存反馈</button><button class="btn btn-default" onclick="closeFeedbackModal()">取消</button></div></div></div>
 {% endblock %}
-
 {% block scripts %}
 <script>
-let interviews = [];
-let currentFeedback = null;
-
-// 加载岗位列表
-async function loadJobs() {
-    const resp = await api('/api/jobs');
-    if (!resp.success) return;
-    const select = document.getElementById('job-filter');
-    resp.data.forEach(job => {
-        const opt = document.createElement('option');
-        opt.value = job.id;
-        opt.textContent = job.name;
-        select.appendChild(opt);
-    });
+let interviews=[],currentFeedback=null,interviewRequest=0;
+const hasInterviewFeedback=f=>/^(面试通过|面试待定|面试未通过) · /.test(f.reason||'');
+async function loadJobs(){const resp=await api('/api/jobs');if(resp.success)for(const job of resp.data)document.getElementById('job-filter').add(new Option(job.name,job.id));}
+async function loadInterviews(){
+ const id=document.getElementById('job-filter').value,request=++interviewRequest,resp=await api('/api/feedback/list'+(id?'?job_id='+id:''));if(!resp.success||request!==interviewRequest)return;
+ const unique=new Map();for(const f of resp.data||[])if(f.feedback_type==='interview'||hasInterviewFeedback(f)){const key=f.job_id+':'+(f.resume_key||f.candidate_name);if(!unique.has(key))unique.set(key,f);}
+ interviews=[...unique.values()];renderInterviews();updateStats();
 }
-
-// 加载面试列表
-async function loadInterviews() {
-    const jobId = document.getElementById('job-filter').value;
-    let url = '/api/feedback/list';
-    if (jobId) url += `?job_id=${jobId}`;
-
-    const resp = await api(url);
-    if (!resp.success) return;
-
-    // 只显示约面类型的反馈
-    interviews = (resp.data || []).filter(f => f.feedback_type === 'interview');
-    renderInterviews();
-    updateStats();
+function updateStats(){const date=new Date(),today=`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;document.getElementById('count-total').textContent=interviews.length;document.getElementById('count-today').textContent=interviews.filter(f=>f.created_at?.startsWith(today)).length;document.getElementById('count-pending').textContent=interviews.filter(f=>!hasInterviewFeedback(f)&&f.pipeline_stage!=='rejected').length;}
+function renderInterviews(){
+ document.getElementById('interview-list').innerHTML=interviews.map((f,i)=>{const feedback=hasInterviewFeedback(f),state=f.pipeline_stage==='rejected'?'已归档':feedback?'已记录反馈':'等待沟通反馈';return `<article class="conversation-card"><div class="conversation-date"><span>${escapeHTML((f.created_at||'').slice(5,10)||'—')}</span><small>加入约面</small></div><div class="conversation-body"><div class="conversation-title"><h3>${escapeHTML(f.candidate_name||'未命名人选')}</h3><span class="tag ${feedback?'tag-pass':'tag-wait'}">${state}</span></div><p>${f.ai_score?`匹配分 ${escapeHTML(f.ai_score)} · `:''}${escapeHTML(f.job_name||'招聘项目')}</p><div class="conversation-note">${escapeHTML(f.reason||'还没有沟通记录，面试后记录具体反馈。')}</div></div><button class="btn btn-default" onclick="openFeedbackModal(${i})">${feedback?'更新反馈':'记录反馈'} ↗</button></article>`;}).join('')||'<div class="card empty"><span class="empty-mark">↔</span><p>还没有约面人选。从候选人工作区，选择值得沟通的人。</p><a href="/candidates" class="btn btn-default">去查看候选人 ↗</a></div>';
 }
-
-// 更新统计
-function updateStats() {
-    const today = new Date().toISOString().split('T')[0];
-    document.getElementById('count-total').textContent = interviews.length;
-    document.getElementById('count-today').textContent = interviews.filter(f => f.created_at && f.created_at.startsWith(today)).length;
-    document.getElementById('count-pending').textContent = interviews.filter(f => !f.synced_to_obsidian).length;
+function openFeedbackModal(idx){currentFeedback=interviews[idx];document.getElementById('feedback-candidate-info').textContent=currentFeedback.candidate_name||'未命名人选';const reason=currentFeedback.reason||'';document.getElementById('feedback-result').value=reason.startsWith('面试未通过')?'reject':reason.startsWith('面试待定')?'pending':'pass';document.getElementById('feedback-reason').value=hasInterviewFeedback(currentFeedback)?reason.replace(/^[^·]+ · /,''):'';document.getElementById('feedback-modal').style.display='flex';}
+function closeFeedbackModal(){document.getElementById('feedback-modal').style.display='none';currentFeedback=null;}
+async function submitFeedback(){
+ const reason=document.getElementById('feedback-reason').value.trim(),result=document.getElementById('feedback-result').value;if(!currentFeedback||!reason){toast('请记录具体的沟通反馈','error');return;}
+ const button=document.getElementById('feedback-submit'),record=currentFeedback;button.disabled=true;
+ try{const resp=await api('/api/pipeline/update',{method:'POST',body:JSON.stringify({job_id:record.job_id,feedback_id:record.id,candidate_name:record.candidate_name,stage:result==='pass'?'submitted':result==='reject'?'rejected':'interview',reject_stage:result==='reject'?'interview':'',reason:({pass:'面试通过',pending:'面试待定',reject:'面试未通过'})[result]+' · '+reason})});if(resp.success){closeFeedbackModal();toast('反馈已保存','success');loadInterviews();}else toast(resp.error||'保存失败','error');}finally{button.disabled=false;}
 }
-
-// 渲染面试列表
-function renderInterviews() {
-    const container = document.getElementById('interview-list');
-    if (interviews.length === 0) {
-        container.innerHTML = '<div class="card" style="text-align:center;padding:40px;color:#999">暂无面试安排，请先在"候选人管理"中约面</div>';
-        return;
-    }
-
-    let html = '<div style="display:flex;flex-direction:column;gap:8px">';
-    interviews.forEach((item, idx) => {
-        html += `
-        <div class="card" style="padding:16px">
-            <div style="display:flex;justify-content:space-between;align-items:center">
-                <div>
-                    <div style="font-size:16px;font-weight:600">${item.candidate_name || '未知'}</div>
-                    <div style="color:#666;font-size:13px;margin-top:4px">
-                        AI评分：${item.ai_score || '-'}分
-                        ${item.created_at ? ' · 安排时间：' + item.created_at.split('T')[0] : ''}
-                    </div>
-                    ${item.reason ? `<div style="color:#999;font-size:12px;margin-top:4px">${item.reason}</div>` : ''}
-                </div>
-                <div style="display:flex;gap:8px">
-                    <button class="btn btn-primary btn-sm" onclick="openFeedbackModal(${idx})">📝 反馈</button>
-                </div>
-            </div>
-        </div>`;
-    });
-    html += '</div>';
-    container.innerHTML = html;
-}
-
-// 打开反馈弹窗
-function openFeedbackModal(idx) {
-    currentFeedback = interviews[idx];
-    document.getElementById('feedback-candidate-info').textContent =
-        `候选人：${currentFeedback.candidate_name || '未知'} · AI评分：${currentFeedback.ai_score || '-'}分`;
-    document.getElementById('feedback-result').value = 'pass';
-    document.getElementById('feedback-reason').value = '';
-    document.getElementById('feedback-modal').style.display = 'flex';
-}
-
-function closeFeedbackModal() {
-    document.getElementById('feedback-modal').style.display = 'none';
-    currentFeedback = null;
-}
-
-// 提交反馈
-async function submitFeedback() {
-    const result = document.getElementById('feedback-result').value;
-    const reason = document.getElementById('feedback-reason').value.trim();
-
-    if (!reason) {
-        toast('请输入反馈详情', 'error');
-        return;
-    }
-
-    // 调用候选人操作 API
-    const resp = await api('/api/candidate/action', {
-        method: 'POST',
-        body: JSON.stringify({
-            action: result === 'pass' ? 'interview' : 'reject',
-            job_id: currentFeedback.job_id,
-            candidate_name: currentFeedback.candidate_name,
-            resume_key: currentFeedback.resume_key || '',
-            ai_score: currentFeedback.ai_score || 0,
-            reason: reason,
-        }),
-    });
-
-    if (resp.success) {
-        closeFeedbackModal();
-        toast('反馈已提交', 'success');
-        loadInterviews();
-    } else {
-        toast(resp.error || '提交失败', 'error');
-    }
-}
-
-loadJobs();
-loadInterviews();
+loadJobs();loadInterviews();
 </script>
 {% endblock %}

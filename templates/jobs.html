@@ -1,21 +1,25 @@
 {% extends "base.html" %}
 {% set active = "jobs" %}
-{% block title %}岗位管理 - 明猎{% endblock %}
+{% block title %}招聘项目 - 明猎{% endblock %}
 
 {% block content %}
 <div class="topbar">
     <div class="topbar-left">
-        <h1>岗位管理</h1>
-        <p>配置招聘岗位，用于简历评分时的匹配标准</p>
+        <h1>招聘项目</h1>
+        <p>管理岗位需求、搜寻结果与招聘进展</p>
     </div>
     <div class="topbar-right">
-        <button class="btn btn-primary" onclick="showModal()">
+        <a href="/" class="btn btn-primary">让助手招人 ↗</a>
+        <button class="btn btn-default" onclick="showModal()">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             新建岗位
         </button>
     </div>
 </div>
 
+{% include 'page_intro.html' %}
+
+<div class="project-toolbar"><p id="project-total">招聘项目</p><input id="project-search" class="form-input" placeholder="搜索项目或岗位关键词…" oninput="renderProjects()"></div>
 <div class="content-grid content-grid-full">
     <div class="card">
         <div id="jobs-list">
@@ -79,7 +83,7 @@
 <div class="modal-overlay" id="status-modal" style="display:none" onclick="if(event.target===this)closeStatusModal()">
     <div class="modal" style="max-width:480px">
         <div class="modal-header">
-            <div class="modal-title">📋 更新候选人状态</div>
+            <div class="modal-title"> 更新候选人状态</div>
             <button class="modal-close" onclick="closeStatusModal()">×</button>
         </div>
         <div style="margin-bottom:12px">
@@ -96,12 +100,12 @@
             <label class="form-label">新状态</label>
             <select id="st-stage" class="form-input" onchange="onStageChange()">
                 <option value="">请选择</option>
-                <option value="contacted">📞 已电话联系</option>
-                <option value="submitted">📤 已推荐给甲方</option>
-                <option value="interview">🎤 进入面试</option>
-                <option value="offer">📋 发了Offer</option>
-                <option value="hired">✅ 已录用</option>
-                <option value="rejected">❌ 淘汰</option>
+                <option value="contacted"> 已电话联系</option>
+                <option value="submitted"> 已推荐给甲方</option>
+                <option value="interview"> 进入面试</option>
+                <option value="offer"> 发了Offer</option>
+                <option value="hired"> 已录用</option>
+                <option value="rejected"> 淘汰</option>
             </select>
         </div>
         <div id="reject-fields" style="display:none">
@@ -162,33 +166,16 @@
 
 {% block scripts %}
 <script>
-// ── 岗位列表 ──
-async function loadJobs() {
-    const resp = await api('/api/jobs');
-    const el = document.getElementById('jobs-list');
-    if (!resp.success || resp.data.length === 0) {
-        el.innerHTML = '<div class="empty"><p>还没有配置岗位，点击右上角"新建岗位"开始</p></div>';
-        return;
-    }
-    el.innerHTML = '<table><thead><tr><th>岗位名称</th><th>关键词</th><th>简历数</th><th>描述预览</th><th>创建时间</th><th>操作</th></tr></thead><tbody>' +
-        resp.data.map(j => `<tr>
-            <td style="font-weight:500">${j.name}</td>
-            <td style="color:var(--text-3)">${j.keyword||'-'}</td>
-            <td><span class="tag tag-pass">${j.resume_count||0}</span></td>
-            <td style="color:var(--text-3);max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(j.job_description||'').substring(0,60)}</td>
-            <td style="color:var(--text-4);font-size:12px">${new Date(j.created_at).toLocaleDateString()}</td>
-            <td>
-                <span class="op-link" onclick="viewPipeline(${j.id},'${j.name.replace(/'/g,"\\'")}')">📊 管道</span>
-                <span style="margin:0 6px;color:var(--border)">|</span>
-                <span class="op-link" onclick="viewResumes(${j.id},'${j.name.replace(/'/g,"\\'")}')">查看简历</span>
-                <span style="margin:0 6px;color:var(--border)">|</span>
-                <span class="op-link" onclick="editJob(${j.id},'${j.name.replace(/'/g,"\\'")}','${(j.keyword||'').replace(/'/g,"\\'")}','${(j.job_description||'').replace(/'/g,"\\'").replace(/\n/g,"\\n")}')">编辑</span>
-                <span style="margin:0 6px;color:var(--border)">|</span>
-                <span class="op-link" style="color:var(--danger)" onclick="deleteJob(${j.id},'${j.name.replace(/'/g,"\\'")}')">删除</span>
-            </td>
-        </tr>`).join('') + '</tbody></table>';
+let projectJobs=[];
+async function loadJobs(){const resp=await api('/api/jobs');if(!resp.success){document.getElementById('jobs-list').innerHTML='<div class="empty">项目加载失败，请刷新重试</div>';return;}projectJobs=resp.data;renderProjects();}
+function renderProjects(){
+ const el=document.getElementById('jobs-list');const q=(document.getElementById('project-search').value||'').toLowerCase();const jobs=projectJobs.filter(j=>(j.name+' '+j.keyword+' '+j.job_description).toLowerCase().includes(q));
+ document.getElementById('project-total').textContent=projectJobs.length+' 个招聘项目';
+ el.className='job-grid';el.replaceChildren();
+ if(!jobs.length){el.innerHTML='<div class="card empty" style="grid-column:1/-1"><div class="empty-mark">↗</div><p>'+ (q?'没有找到相关项目，试试其他关键词。':'还没有招聘项目。添加一份 JD，开始你的第一次人才搜寻。')+'</p><button class="btn btn-primary" style="margin-top:16px" onclick="showModal()">新建招聘项目</button></div>';return;}
+ for(const j of jobs){const card=document.createElement('article');card.className='project-card';card.innerHTML=`<div class="eyebrow"><span>PROJECT / ${String(j.id).padStart(2,'0')}</span><span>${new Date(j.created_at).toLocaleDateString('zh-CN')}</span></div><h3>${escapeHTML(j.name)}</h3><p class="project-desc">${escapeHTML(j.job_description||'补充岗位描述，让人才搜索更有方向。')}</p><div class="project-info"><span class="project-count">${j.resume_count||0}</span><small>份候选简历</small><a href="/?job=${Number(j.id)}">让助手继续 ↗</a></div><div class="project-actions"><button class="btn btn-primary" data-action="resumes">查看简历</button><button class="btn btn-default" data-action="pipeline">招聘进展</button><button class="btn btn-default" data-action="edit">编辑</button><button class="btn btn-default" data-action="delete" aria-label="删除项目">删除</button></div>`;
+ card.querySelector('[data-action=resumes]').onclick=()=>viewResumes(j.id,j.name);card.querySelector('[data-action=pipeline]').onclick=()=>viewPipeline(j.id,j.name);card.querySelector('[data-action=edit]').onclick=()=>editJob(j.id,j.name,j.keyword||'',j.job_description||'');card.querySelector('[data-action=delete]').onclick=()=>deleteJob(j.id,j.name);el.append(card);}
 }
-
 // ── 岗位 CRUD ──
 function showModal() {
     document.getElementById('modal').style.display = 'flex';
@@ -233,19 +220,20 @@ document.getElementById('job-form').addEventListener('submit', async (e) => {
 });
 
 loadJobs();
+if(new URLSearchParams(location.search).has("new")) showModal();
 
 // ══════════════════════════════════════════
 // 管道视图
 // ══════════════════════════════════════════
 
 const STAGE_CONFIG = {
-    recommended: { label: '🟢 AI推荐', color: '#e6f9ee', icon: '🤖' },
-    contacted:   { label: '📞 已联系', color: '#e8f4fd', icon: '📞' },
-    submitted:   { label: '📤 已推荐甲方', color: '#fff7e6', icon: '📤' },
-    interview:   { label: '🎤 面试中', color: '#f0e6ff', icon: '🎤' },
-    offer:       { label: '📋 Offer', color: '#e6ffe6', icon: '📋' },
-    hired:       { label: '✅ 已录用', color: '#d4edda', icon: '✅' },
-    rejected:    { label: '❌ 已淘汰', color: '#fff0f0', icon: '❌' },
+    recommended: { label: ' AI推荐', color: '#e6f9ee', icon: '' },
+    contacted:   { label: ' 已联系', color: '#e8f4fd', icon: '' },
+    submitted:   { label: ' 已推荐甲方', color: '#fff7e6', icon: '' },
+    interview:   { label: ' 面试中', color: '#f0e6ff', icon: '' },
+    offer:       { label: ' Offer', color: '#e6ffe6', icon: '' },
+    hired:       { label: ' 已录用', color: '#d4edda', icon: '' },
+    rejected:    { label: ' 已淘汰', color: '#fff0f0', icon: '' },
 };
 
 const REJECT_LABELS = {
@@ -322,7 +310,7 @@ function renderPipeline(data) {
                 ).join('');
             }
             // 总是可以更新状态
-            actions += ` <button class="btn btn-sm btn-default" onclick="openStatusUpdate('${esc(name)}',${score},'')">✏️</button>`;
+            actions += ` <button class="btn btn-sm btn-default" onclick="openStatusUpdate('${esc(name)}',${score},'')"></button>`;
 
             html += `<div class="pipeline-card">
                 <div class="pipeline-card-info">
@@ -338,7 +326,7 @@ function renderPipeline(data) {
     // 空状态
     const total = summary.total || 0;
     if (total === 0) {
-        html += '<div class="empty"><p>暂无候选人，去<a href="/scrape" class="op-link">简历抓取</a></p></div>';
+        html += '<div class="empty"><p>暂无候选人，让<a href="/" class="op-link">招聘助手</a>帮你找人</p></div>';
     }
 
     el.innerHTML = html;
@@ -444,7 +432,7 @@ async function viewResumes(jobId, jobName) {
 
     const resp = await api('/api/jobs/' + jobId + '/resumes');
     if (!resp.success || !resp.data || resp.data.length === 0) {
-        document.getElementById('resume-list').innerHTML = '<div class="empty"><p>该岗位下还没有简历，去<a href="/scrape" class="op-link">简历抓取</a></p></div>';
+        document.getElementById('resume-list').innerHTML = '<div class="empty"><p>该岗位下还没有简历，让<a href="/" class="op-link">招聘助手</a>帮你找人</p></div>';
         return;
     }
     currentResumes = resp.data;
@@ -493,8 +481,8 @@ function renderResumeTable(resumes) {
                         const label = req.requirement || '';
                         const short = label.length > 10 ? label.substring(0, 10) + '…' : label;
                         return req.met
-                            ? `<span class="tag-req-pass" title="${label}">✓ ${short}</span>`
-                            : `<span class="tag-req-fail" title="${req.detail||label}">✗ ${short}</span>`;
+                            ? `<span class="tag-req-pass" title="${label}"> ${short}</span>`
+                            : `<span class="tag-req-fail" title="${req.detail||label}"> ${short}</span>`;
                     }).join('');
                 }
             } else if (r.score_error) {
@@ -506,11 +494,11 @@ function renderResumeTable(resumes) {
             const score100 = (r.score100 || {}).total_score || 0;
             const hasFullText = r.full_text && r.full_text.length > 0;
             const actions =
-                (hasFullText ? `<a href="javascript:void(0)" class="op-link" onclick="toggleFullText('${safeKey}')" title="查看全文">📄</a> ` : '') +
-                `<a href="javascript:void(0)" class="op-link" onclick="editResumeName('${safeKey}')" title="编辑姓名">✏️</a> ` +
-                `<a href="javascript:void(0)" class="op-link" onclick="openStatusUpdate('${safeName}',${score100},'')" title="更新状态">📋</a> ` +
-                `<a href="javascript:void(0)" class="op-link" style="color:var(--danger)" onclick="deleteResume('${safeKey}','${safeName}')" title="删除">🗑️</a> ` +
-                (detailUrl ? `<a href="${detailUrl}" target="_blank" class="op-link" title="猎聘详情">🔗</a>` : '');
+                (hasFullText ? `<a href="javascript:void(0)" class="op-link" onclick="toggleFullText('${safeKey}')" title="查看全文"></a> ` : '') +
+                `<a href="javascript:void(0)" class="op-link" onclick="editResumeName('${safeKey}')" title="编辑姓名"></a> ` +
+                `<a href="javascript:void(0)" class="op-link" onclick="openStatusUpdate('${safeName}',${score100},'')" title="更新状态"></a> ` +
+                `<a href="javascript:void(0)" class="op-link" style="color:var(--danger)" onclick="deleteResume('${safeKey}','${safeName}')" title="删除"></a> ` +
+                (detailUrl ? `<a href="${detailUrl}" target="_blank" class="op-link" title="猎聘详情"></a>` : '');
 
             return '<tr>' +
                 `<td style="color:var(--text-4)">${i+1}</td>` +

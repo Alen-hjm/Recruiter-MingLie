@@ -3,10 +3,13 @@
 
 import asyncio
 import json
+import copy
+import threading
+import uuid
 from datetime import datetime
 from pathlib import Path
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from flask_login import current_user, login_required
 
 from .. import config
@@ -31,6 +34,8 @@ bp = Blueprint("api_agent", __name__, url_prefix="/api")
 # 前端已经会通过 /api/chat/history 回补，所以这里不做持久化；
 # 若要长期保留，应该落到一张 chat_messages 表，而不是继续加内存字典。
 _agent_sessions: dict[str, list] = {}
+_agent_runs: dict[int, dict] = {}
+_run_lock = threading.RLock()
 
 # 单个会话保留的最大消息条数（user + assistant 各算一条）
 _MAX_HISTORY = 40
@@ -50,23 +55,27 @@ def _push_history(user_id: int, history: list) -> None:
     _agent_sessions[_session_key(user_id)] = history[-_MAX_HISTORY:]
 
 
-def _run_agent_sync(user_id: int, message: str, history: list) -> dict:
+def _run_agent_sync(user_id: int, message: str, history: list, on_progress=None) -> dict:
     """同步执行 Agent（路由是同步上下文，这里自己管事件循环）"""
     from ..agent import run_agent
-    return asyncio.run(run_agent(user_id=user_id, goal=message, history=history))
+    clean_history = [{"role": row["role"], "content": row["content"]} for row in history]
+    kwargs = {"user_id": user_id, "goal": message, "history": clean_history}
+    if on_progress:
+        kwargs["on_progress"] = on_progress
+    return asyncio.run(run_agent(**kwargs))
 
 
-def _chat_turn(user_id: int, message: str) -> dict:
+def _chat_turn(user_id: int, message: str, on_progress=None) -> dict:
     """一轮对话：拼历史 → 调 Agent → 记历史"""
     history = _get_history(user_id)
     history.append({"role": "user", "content": message})
     _push_history(user_id, history)
 
-    result = _run_agent_sync(user_id, message, history[:-1])  # 当前消息已在 goal 里
+    result = _run_agent_sync(user_id, message, history[:-1], on_progress=on_progress)
 
-    reply = result.get("summary", "处理完成")
+    reply = result.get("summary") or result.get("error") or "处理完成"
     history = _get_history(user_id)
-    history.append({"role": "assistant", "content": reply})
+    history.append({"role": "assistant", "content": reply, "details": result.get("results", [])})
     _push_history(user_id, history)
     return result
 
@@ -87,18 +96,97 @@ def api_chat():
         return jsonify({"success": False, "error": str(e)}), 500
 
     return jsonify({
-        "success": True,
-        "reply": result.get("summary", "处理完成"),
+        "success": result.get("success", True),
+        "error": result.get("error"),
+        "reply": result.get("summary") or result.get("error") or "处理完成",
         "plan": result.get("plan", {}),
         "results": result.get("results", []),
         "is_chat": result.get("is_chat", False),
     })
 
 
+def _run_chat_background(app, user_id, run_id, message):
+    def progress(**details):
+        with _run_lock:
+            run = _agent_runs.get(user_id)
+            if run and run["id"] == run_id:
+                completed = details.pop("completed_phase", None)
+                if completed:
+                    phases = run.setdefault("completed_phases", [])
+                    if completed not in phases:
+                        phases.append(completed)
+                run.update(details)
+
+    with app.app_context():
+        try:
+            result = _chat_turn(user_id, message, on_progress=progress)
+            failed = not result.get("success", True) or any(
+                not row.get("result", {}).get("success", False)
+                for row in result.get("results", [])
+            )
+            progress(status="attention" if failed else "done", phase="finished",
+                     label="需要查看执行结果" if failed else "本轮处理完成",
+                     result=result, finished_at=datetime.now().isoformat())
+        except Exception as exc:
+            reply = "本轮执行中断：%s" % exc
+            history = _get_history(user_id)
+            history.append({"role": "assistant", "content": reply})
+            _push_history(user_id, history)
+            progress(status="error", phase="finished", label="执行中断",
+                     result={"success": False, "error": reply}, finished_at=datetime.now().isoformat())
+
+
+@bp.route("/chat/run", methods=["GET", "POST"])
+@login_required
+def api_chat_run():
+    """One background turn per user; page changes never resubmit a running turn.
+
+    Like chat history, run state is process-local and expires on server restart.
+    """
+    uid = current_user.id
+    if request.method == "GET":
+        with _run_lock:
+            run = copy.deepcopy(_agent_runs.get(uid))
+        if run:
+            from ..models import get_scrape_task, get_score_task
+            for kind, getter in [("scrape", get_scrape_task), ("score", get_score_task)]:
+                task = getter(run[kind + "_task_id"]) if run.get(kind + "_task_id") else None
+                if task and task["user_id"] == uid:
+                    run[kind] = {key: task.get(key) for key in
+                                 ("status", "result_count", "total_count", "passed_count", "error_msg")}
+        return jsonify(success=True, data=run,
+                       model_configured=bool(config.resolve_llm_config(get_settings(uid) or {})["api_key"]))
+    data = request.get_json(silent=True) or {}
+    message = data.get("message")
+    if not isinstance(message, str) or not message.strip() or len(message) > 12000:
+        return jsonify(success=False, error="请输入招聘需求，最多12000字"), 400
+    message = message.strip()
+    with _run_lock:
+        previous = _agent_runs.get(uid)
+        if previous and previous["status"] == "running":
+            return jsonify(success=False, error="当前需求仍在处理，请稍后补充", data=previous), 409
+        if not config.resolve_llm_config(get_settings(uid) or {})["api_key"]:
+            return jsonify(success=False, error="先在设置中接入模型，即可让助手处理招聘需求"), 400
+        run = {"id": uuid.uuid4().hex, "status": "running", "phase": "planning",
+               "label": "正在理解你的招聘需求", "message": message,
+               "started_at": datetime.now().isoformat()}
+        _agent_runs[uid] = run
+        response_run = copy.deepcopy(run)
+        threading.Thread(target=_run_chat_background,
+                         args=(current_app._get_current_object(), uid, run["id"], message),
+                         daemon=True).start()
+    return jsonify(success=True, data=response_run), 202
+
+
 @bp.route("/chat/clear", methods=["POST"])
 @login_required
 def api_chat_clear():
-    _agent_sessions.pop(_session_key(current_user.id), None)
+    with _run_lock:
+        run = _agent_runs.get(current_user.id)
+        if run and run["status"] == "running":
+            return jsonify(success=False, error="当前需求正在处理，完成后可清空对话"), 409
+        _agent_runs.pop(current_user.id, None)
+        _agent_sessions.pop(_session_key(current_user.id), None)
     return jsonify({"success": True})
 
 
@@ -141,8 +229,8 @@ def api_candidates_list(job_id):
     conn = get_db()
     try:
         feedbacks = conn.execute(
-            """SELECT candidate_name, resume_key, feedback_type, ai_score, reason
-               FROM interview_feedback WHERE user_id = ? AND job_id = ?""",
+            """SELECT candidate_name, resume_key, feedback_type, ai_score, reason, pipeline_stage
+               FROM interview_feedback WHERE user_id = ? AND job_id = ? ORDER BY id""",
             (current_user.id, job_id),
         ).fetchall()
     finally:
@@ -155,14 +243,20 @@ def api_candidates_list(job_id):
         key = resume_key(resume)
         resume["_key"] = key
         resume["_score"] = extract_total_score(resume)
+        resume["_has_score"] = bool(resume.get("score100") or resume.get("analysis")) and not resume.get("score_error")
 
         fb = feedback_map.get(key)
         if fb:
             resume["_feedback"] = fb
-            if fb["feedback_type"] == "interview":
+            if fb["pipeline_stage"] == "rejected":
+                result["rejected"].append(resume)
+            elif (fb["feedback_type"] == "interview"
+                  or fb["pipeline_stage"] in {"interview", "submitted", "offer", "hired"}):
                 result["interviewed"].append(resume)
             else:
                 result["rejected"].append(resume)
+        elif not resume["_has_score"]:
+            result["pending"].append(resume)
         elif resume["_score"] >= 80:
             result["recommended"].append(resume)
         elif resume["_score"] >= 60:
@@ -338,7 +432,8 @@ def api_update_pipeline():
 
     target = None
     for f in get_interview_feedbacks(current_user.id, int(job_id)):
-        if candidate_name == f.get("candidate_name", ""):
+        if (candidate_name == f.get("candidate_name", "")
+                and (not data.get("feedback_id") or str(f["id"]) == str(data["feedback_id"]))):
             target = f
             break
     if not target:

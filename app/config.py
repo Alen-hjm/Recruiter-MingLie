@@ -167,6 +167,8 @@ MAX_TOKENS_PER_USER = _env_int("MINGLIE_MAX_TOKENS_PER_USER", 20)
 # ------------------------------------------------------------------ 抓取
 # 猎聘抓取仍然保留，这里只集中默认参数
 SCRAPE_CDP_PORT = _env_int("MINGLIE_CDP_PORT", 9222)
+SCRAPE_LAUNCH_MODE = _env("MINGLIE_SCRAPE_MODE", "browser")
+SCRAPLING_ENGINE = _env("MINGLIE_SCRAPLING_ENGINE", "dynamic")
 SCRAPE_HEADLESS = _env_bool("MINGLIE_SCRAPE_HEADLESS", False)
 SCRAPE_TIMEOUT_MS = _env_int("MINGLIE_SCRAPE_TIMEOUT_MS", 30000)
 SCRAPE_MAX_PAGES_LIMIT = _env_int("MINGLIE_SCRAPE_MAX_PAGES", 5)

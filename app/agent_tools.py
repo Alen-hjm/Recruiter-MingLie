@@ -45,12 +45,13 @@ TOOLS = [
             "keyword": {"type": "string", "description": "搜索关键词"},
             "city": {"type": "string", "description": "城市，如用户未指定则留空"},
             "max_pages": {"type": "integer", "description": "爬取页数，1-5，默认3"},
+            "max_results": {"type": "integer", "description": "本次收集简历上限，1-50，默认10"},
         },
         "returns": "爬取的简历数量",
     },
     {
         "name": "score_resumes",
-        "description": "对岗位下的简历进行AI评分，评分后自动分流（<60删除，60-80待定，>=80推荐）",
+        "description": "对岗位下的简历进行AI评分，评分后分类（<60暂不匹配，60-80待定，>=80推荐），保留原始简历",
         "parameters": {
             "job_id": {"type": "integer", "description": "岗位ID"},
         },
@@ -84,8 +85,9 @@ TOOLS = [
         "parameters": {
             "job_name": {"type": "string", "description": "岗位名称"},
             "job_description": {"type": "string", "description": "岗位描述，如果没有则留空"},
-            "city": {"type": "string", "description": "城市，默认上海"},
+            "city": {"type": "string", "description": "用户指定的工作城市，不擅自填入其他城市"},
             "max_pages": {"type": "integer", "description": "爬取页数，1-5，默认3"},
+            "max_results": {"type": "integer", "description": "本次收集简历上限，1-50，默认10"},
         },
         "returns": "招聘结果摘要（推荐候选人列表）",
     },
@@ -138,8 +140,13 @@ TOOLS = [
 class ToolExecutor:
     """工具执行器，封装实际的业务逻辑调用"""
 
-    def __init__(self, user_id: int):
+    def __init__(self, user_id: int, on_progress=None):
         self.user_id = user_id
+        self.on_progress = on_progress
+
+    def _progress(self, phase, label, **details):
+        if self.on_progress:
+            self.on_progress(phase=phase, label=label, **details)
 
     async def execute(self, tool_name: str, params: dict) -> dict:
         """执行指定工具，返回结果"""
@@ -204,12 +211,15 @@ class ToolExecutor:
             return {"success": False, "error": "需要 job_id"}
 
         job = get_job(int(job_id))
-        if not job:
+        if not job or job["user_id"] != self.user_id:
             return {"success": False, "error": "岗位不存在"}
 
         keyword = params.get("keyword") or job.get("keyword", "")
         city = params.get("city", "") or ""
         max_pages = min(int(params.get("max_pages", 3)), config.SCRAPE_MAX_PAGES_LIMIT)
+        max_results = int(params.get("max_results", 10))
+        if not 1 <= max_results <= 50:
+            return {"success": False, "error": "本次收集上限应在1至50份之间"}
 
         # 从 JD 中提取快速筛选规则（学历/年限/年龄）
         quick_filter = {}
@@ -225,6 +235,7 @@ class ToolExecutor:
             get_settings(self.user_id), keyword, city, max_pages,
             search_mode="auto", user_id=self.user_id,
         )
+        scrape_config["scraper"]["max_results"] = max_results
         if quick_filter:
             scrape_config["quick_filter"] = quick_filter
 
@@ -232,13 +243,15 @@ class ToolExecutor:
             self.user_id, keyword, city, "liepin", max_pages, job_id=int(job_id)
         )
         start_scrape_task(task_id, scrape_config, user_id=self.user_id, job_id=int(job_id))
+        self._progress("searching", "正在搜寻符合条件的人才", job_id=int(job_id), scrape_task_id=task_id)
 
-        # 轮询等待完成（最多 2 分钟）
+        # Background assistant turns can wait without blocking page navigation.
         from .models import get_scrape_task
-        for _ in range(120):
-            time.sleep(1)
+        for _ in range(1800):
+            import asyncio
+            await asyncio.sleep(1)
             task = get_scrape_task(task_id)
-            if task and task["status"] in ("done", "error"):
+            if task and task["status"] in ("done", "error", "attention"):
                 return {
                     "success": task["status"] == "done",
                     "task_id": task_id,
@@ -246,7 +259,7 @@ class ToolExecutor:
                     "error": task.get("error_msg"),
                 }
 
-        return {"success": True, "task_id": task_id, "message": "爬取任务已提交，正在后台运行"}
+        return {"success": False, "pending": True, "task_id": task_id, "error": "搜寻仍在后台运行，请等待完成后继续分析"}
 
     async def _tool_score_resumes(self, params: dict) -> dict:
         """评分简历"""
@@ -258,7 +271,7 @@ class ToolExecutor:
             return {"success": False, "error": "需要 job_id"}
 
         job = get_job(int(job_id))
-        if not job:
+        if not job or job["user_id"] != self.user_id:
             return {"success": False, "error": "岗位不存在"}
 
         job_description = job.get("job_description", "")
@@ -275,6 +288,7 @@ class ToolExecutor:
         task_id, _ = start_score_task(
             self.user_id, int(job_id), job["name"], job_description, resumes, "100"
         )
+        self._progress("evaluating", "正在分析收集到的简历", job_id=int(job_id), score_task_id=task_id)
 
         # 轮询等待完成（最多 5 分钟）
         for _ in range(300):
@@ -290,7 +304,7 @@ class ToolExecutor:
                     "error": task.get("error_msg"),
                 }
 
-        return {"success": True, "task_id": task_id, "message": "评分任务已提交，正在后台运行"}
+        return {"success": False, "pending": True, "task_id": task_id, "error": "分析仍在后台运行，请等待完成"}
 
     async def _tool_get_candidates(self, params: dict) -> dict:
         """获取候选人列表"""
@@ -302,7 +316,7 @@ class ToolExecutor:
             return {"success": False, "error": "需要 job_id"}
 
         job = get_job(int(job_id))
-        if not job:
+        if not job or job["user_id"] != self.user_id:
             return {"success": False, "error": "岗位不存在"}
 
         resumes = get_resumes_by_job(self.user_id, int(job_id))
@@ -345,10 +359,15 @@ class ToolExecutor:
                     score = s
 
             resume["_score"] = round(score)
+            assessment = resume.get("score100") or resume.get("analysis") or {}
+            if isinstance(assessment, dict):
+                resume["_summary"] = assessment.get("summary", "")
             resume.pop("score100", None)
             resume.pop("analysis", None)
 
-            if score >= 80:
+            if key not in score_map:
+                result["pending"].append(resume)
+            elif score >= 80:
                 result["recommended"].append(resume)
             elif score >= 60:
                 result["pending"].append(resume)
@@ -357,11 +376,13 @@ class ToolExecutor:
 
         return {
             "success": True,
+            "job_id": int(job_id),
             "job_name": job["name"],
             "recommended_count": len(result["recommended"]),
             "pending_count": len(result["pending"]),
             "rejected_count": len(result["rejected"]),
             "recommended": result["recommended"][:10],  # 只返回前10个
+            "pending": result["pending"][:10],
         }
 
     async def _tool_search_knowledge(self, params: dict) -> dict:
@@ -403,6 +424,12 @@ class ToolExecutor:
         job_description = params.get("job_description", "")
         city = params.get("city", "") or ""
         max_pages = min(int(params.get("max_pages", 3)), 5)
+        max_results = int(params.get("max_results", 10))
+        if not job_name or not city:
+            return {"success": False, "error": "请补充岗位和工作城市"}
+        if not 1 <= max_results <= 50:
+            return {"success": False, "error": "本次收集上限应在1至50份之间"}
+        self._progress("understanding", "理解岗位方向与搜寻条件")
 
         results = {}
 
@@ -413,8 +440,6 @@ class ToolExecutor:
             jd_data = jd_result["data"]
             keywords = jd_data.get("keywords", [])
             keyword_str = ", ".join(keywords) if keywords else job_name
-            if not job_description and jd_data.get("hard_requirements"):
-                job_description = "\n".join(jd_data.get("hard_requirements", []))
         else:
             keyword_str = job_name
 
@@ -430,6 +455,7 @@ class ToolExecutor:
 
         job_id = create_result["job_id"]
         results["job_id"] = job_id
+        self._progress("searching", "开始人才搜寻", job_id=job_id, completed_phase="understanding")
         print(f"[一键招聘] 岗位已创建，ID: {job_id}")
 
         # Step 3: 爬取简历
@@ -439,12 +465,15 @@ class ToolExecutor:
             "keyword": keyword_str,
             "city": city,
             "max_pages": max_pages,
+            "max_results": max_results,
         })
         results["scrape"] = scrape_result
 
         if not scrape_result.get("success"):
             return {
-                "success": True,
+                "success": False,
+                "pending": scrape_result.get("pending", False),
+                "error": scrape_result.get("error", "搜寻尚未完成"),
                 "data": results,
                 "message": f"岗位已创建（ID:{job_id}），但爬取失败: {scrape_result.get('error', '未知错误')}"
             }
@@ -471,20 +500,30 @@ class ToolExecutor:
             }
 
         # Step 4: AI 评分
+        self._progress("evaluating", "开始分析搜寻结果", completed_phase="searching")
         print(f"[一键招聘] Step 4: AI 评分")
         score_result = await self._tool_score_resumes({"job_id": job_id})
         results["score"] = score_result
 
         if not score_result.get("success"):
             return {
-                "success": True,
+                "success": False,
+                "pending": score_result.get("pending", False),
+                "error": score_result.get("error", "分析尚未完成"),
                 "data": results,
                 "message": f"爬取完成（{resume_count}份），但评分失败: {score_result.get('error', '未知错误')}"
             }
 
         # Step 5: 获取推荐候选人
+        self._progress("recommending", "整理推荐人选与匹配结果", job_id=job_id, completed_phase="evaluating")
         print(f"[一键招聘] Step 5: 获取推荐候选人")
         candidates_result = await self._tool_get_candidates({"job_id": job_id})
+        if not candidates_result.get("success"):
+            results["candidates"] = candidates_result
+            return {"success": False, "data": results,
+                    "error": candidates_result.get("error", "人选整理失败，已收集和分析的数据保留")}
+        if candidates_result.get("success"):
+            self._progress("recommending", "推荐人选已整理", completed_phase="recommending")
         results["candidates"] = candidates_result
 
         # Step 5.5: 自动创建候选人管道记录
@@ -513,17 +552,19 @@ class ToolExecutor:
         pending = candidates_result.get("pending_count", 0)
         rejected = candidates_result.get("rejected_count", 0)
 
-        summary = "✅ 招聘完成！\n"
-        summary += f"📋 岗位：{job_name}（ID:{job_id}）\n"
-        summary += f"📄 爬取简历：{resume_count}份\n"
-        summary += f"🟢 推荐面试（≥80分）：{recommended}人\n"
-        summary += f"🟡 待定（60-80分）：{pending}人\n"
-        summary += f"🔴 已淘汰（<60分）：{rejected}人\n"
-        summary += f"\n📝 候选人已进入管道，状态变更会自动同步到 Obsidian。"
-        summary += f"\n📞 可以开始打电话了！用 update_candidate_status 更新进展。"
+        summary = "本轮搜寻与分析已完成。\n"
+        summary += f"岗位：{job_name}\n"
+        summary += f"本轮收集简历：{resume_count}份（目标{max_results}份）\n"
+        summary += f"项目内建议进一步沟通：{recommended}人\n"
+        summary += f"项目内待核实：{pending}人\n"
+        summary += f"项目内暂不匹配：{rejected}人\n"
+        summary += "\n人选已整理到招聘项目，推荐结果供进一步核实。"
+        if results.get("obsidian_pipeline", {}).get("success"):
+            summary += "招聘进展已同步到已连接的知识库。"
+        summary += "沟通后可以直接告诉助手反馈，继续更新招聘进展。"
 
         if candidates_result.get("recommended"):
-            summary += "\n\n🏆 Top 推荐候选人：\n"
+            summary += "\n\n建议优先了解的人选：\n"
             for i, r in enumerate(candidates_result["recommended"][:5], 1):
                 score = r.get("_score", 0)
                 summary += f"  {i}. {r.get('name', '未知')} - {score}分 - {r.get('title', '')} - {r.get('company', '')}\n"

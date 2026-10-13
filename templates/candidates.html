@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% set active = "candidates" %}
-{% block title %}候选人管理 - 明猎{% endblock %}
+{% block title %}候选人 - 明猎{% endblock %}
 
 {% block content %}
 <div class="topbar">
     <div class="topbar-left">
-        <h1>候选人管理</h1>
-        <p>查看评分结果，约面或淘汰候选人</p>
+        <h1>候选人</h1>
+        <p>结合经历证据，决定下一步沟通</p>
     </div>
     <div style="display:flex;gap:8px">
         <select id="job-select" class="form-input" style="width:200px" onchange="loadCandidates()">
@@ -15,34 +15,10 @@
     </div>
 </div>
 
-<!-- 统计卡片 -->
-<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
-    <div class="card" style="text-align:center;padding:16px">
-        <div style="font-size:24px;font-weight:700;color:#10b981" id="count-recommended">0</div>
-        <div style="font-size:12px;color:#666;margin-top:4px">🟢 推荐约面 (≥80)</div>
-    </div>
-    <div class="card" style="text-align:center;padding:16px">
-        <div style="font-size:24px;font-weight:700;color:#f59e0b" id="count-pending">0</div>
-        <div style="font-size:12px;color:#666;margin-top:4px">🟡 待定 (60-80)</div>
-    </div>
-    <div class="card" style="text-align:center;padding:16px">
-        <div style="font-size:24px;font-weight:700;color:#6366f1" id="count-interviewed">0</div>
-        <div style="font-size:12px;color:#666;margin-top:4px">📋 已约面</div>
-    </div>
-    <div class="card" style="text-align:center;padding:16px">
-        <div style="font-size:24px;font-weight:700;color:#ef4444" id="count-rejected">0</div>
-        <div style="font-size:12px;color:#666;margin-top:4px">🔴 已淘汰</div>
-    </div>
-</div>
+{% include 'page_intro.html' %}
 
-<!-- Tab 切换 -->
-<div style="display:flex;gap:4px;margin-bottom:16px;border-bottom:2px solid #eee;padding-bottom:8px">
-    <button class="btn btn-sm tab-btn active" data-tab="recommended" onclick="switchTab('recommended')">🟢 推荐约面</button>
-    <button class="btn btn-sm tab-btn" data-tab="pending" onclick="switchTab('pending')">🟡 待定</button>
-    <button class="btn btn-sm tab-btn" data-tab="interviewed" onclick="switchTab('interviewed')">📋 已约面</button>
-    <button class="btn btn-sm tab-btn" data-tab="rejected" onclick="switchTab('rejected')">🔴 已淘汰</button>
-</div>
-
+<div class="metric-strip"><div><strong id="count-recommended">0</strong><span>待优先沟通</span></div><div><strong id="count-pending">0</strong><span>待进一步核实</span></div><div><strong id="count-interviewed">0</strong><span>已约面</span></div><div><strong id="count-rejected">0</strong><span>已归档</span></div></div>
+<div class="segmented" aria-label="候选人阶段"><button class="btn tab-btn active" data-tab="recommended" onclick="switchTab('recommended')">优先沟通</button><button class="btn tab-btn" data-tab="pending" onclick="switchTab('pending')">待核实</button><button class="btn tab-btn" data-tab="interviewed" onclick="switchTab('interviewed')">已约面</button><button class="btn tab-btn" data-tab="rejected" onclick="switchTab('rejected')">已归档</button></div>
 <!-- 候选人列表 -->
 <div id="candidates-container"></div>
 
@@ -82,8 +58,10 @@ async function loadJobs() {
         select.appendChild(opt);
     });
     // 自动选择第一个
+    if (!resp.data.length) document.getElementById('candidates-container').innerHTML='<div class="card empty"><div class="empty-mark">◎</div><p>先创建招聘项目，再通过人才搜索积累候选人。</p><a href="/jobs" class="btn btn-primary">创建招聘项目</a></div>';
     if (resp.data.length > 0) {
-        select.value = resp.data[0].id;
+        const requested=new URLSearchParams(location.search).get('job');
+        select.value = resp.data.some(j=>String(j.id)===requested)?requested:resp.data[0].id;
         loadCandidates();
     }
 }
@@ -102,7 +80,8 @@ async function loadCandidates() {
 
     candidatesData = resp.data;
     updateCounts();
-    renderTab();
+    let saved;try{saved=sessionStorage.getItem('minglie:'+document.body.dataset.user+':candidate-tab');}catch{}
+    switchTab(saved&&candidatesData[saved]?saved:(candidatesData.recommended.length?'recommended':'pending'));
 }
 
 // 更新统计
@@ -116,6 +95,7 @@ function updateCounts() {
 // 切换 Tab
 function switchTab(tab) {
     currentTab = tab;
+    try{sessionStorage.setItem('minglie:'+document.body.dataset.user+':candidate-tab',tab);}catch{}
     document.querySelectorAll('.tab-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.tab === tab);
     });
@@ -153,41 +133,42 @@ function renderTab() {
             }
         }
         score = Math.round(score);
-        const scoreColor = score >= 80 ? '#10b981' : score >= 60 ? '#f59e0b' : '#ef4444';
+        const hasScore = resume._has_score ?? Boolean(resume.score100 || resume.analysis);
+        const scoreColor = !hasScore ? '#8c967f' : score >= 80 ? '#10b981' : score >= 60 ? '#f59e0b' : '#ef4444';
         const feedback = resume._feedback;
 
         html += `
         <div class="card" style="padding:16px">
             <div style="display:flex;justify-content:space-between;align-items:flex-start">
                 <div style="flex:1">
-                    <div style="font-size:16px;font-weight:600">${resume.name || '未知'}</div>
-                    <div style="color:#666;font-size:13px;margin-top:4px">${resume.title || ''} · ${resume.company || ''}</div>
+                    <div style="font-size:16px;font-weight:600">${escapeHTML(resume.name || '未知')}</div>
+                    <div style="color:#666;font-size:13px;margin-top:4px">${escapeHTML(resume.title || '')} · ${escapeHTML(resume.company || '')}</div>
                     <div style="color:#999;font-size:12px;margin-top:4px">
-                        ${resume.experience || ''} · ${resume.education || ''} · ${resume.location || ''}
+                        ${escapeHTML(resume.experience || '')} · ${escapeHTML(resume.education || '')} · ${escapeHTML(resume.location || '')}
                         ${resume.salary ? ' · ' + resume.salary : ''}
                     </div>
-                    ${resume.analysis?.summary ? `<div style="margin-top:8px;font-size:13px;color:#333">${resume.analysis.summary}</div>` : ''}
+                    ${resume.analysis?.summary ? `<div style="margin-top:8px;font-size:13px;color:#333">${escapeHTML(resume.analysis.summary)}</div>` : ''}
                     ${feedback ? `<div style="margin-top:8px;font-size:12px;padding:6px 10px;border-radius:6px;background:${feedback.feedback_type === 'interview' ? '#e6f9ee' : '#fff0f0'};color:${feedback.feedback_type === 'interview' ? '#1a8a4a' : '#c0392b'}">
-                        ${feedback.feedback_type === 'interview' ? '✅ 已约面' : '❌ ' + feedback.reason}
+                        ${feedback.feedback_type === 'interview' ? ' 已约面' : ' ' + escapeHTML(feedback.reason)}
                     </div>` : ''}
                 </div>
                 <div style="text-align:center;margin-left:16px">
-                    <div style="font-size:28px;font-weight:700;color:${scoreColor}">${score}</div>
-                    <div style="font-size:11px;color:#999">AI 评分</div>
+                    <div style="font-size:28px;font-weight:700;color:${scoreColor}">${hasScore ? score : "—"}</div>
+                    <div style="font-size:11px;color:#999">${hasScore ? "匹配参考" : "未分析"}</div>
                 </div>
             </div>
             ${!feedback ? `
-            <div style="display:flex;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid #eee">
-                <button class="btn btn-primary btn-sm" onclick="doAction('interview', ${idx})">✅ 约面</button>
-                <button class="btn btn-danger btn-sm" onclick="openRejectModal(${idx})">❌ 淘汰</button>
+            <div class="candidate-actions" style="display:flex;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid #eee">
+                <button class="btn btn-primary btn-sm" onclick="doAction('interview', ${idx})"> 约面</button>
+                <button class="btn btn-danger btn-sm" onclick="openRejectModal(${idx})"> 淘汰</button>
                 <div style="display:flex;gap:6px;margin-left:auto">
-                    ${resume.organized_text ? `<button class="btn btn-default btn-sm" onclick="showOrganizedResume(${idx})">📋 AI整理简历</button>` : ''}
-                    <button class="btn btn-default btn-sm" onclick="generateReport('${encodeURIComponent(resumeKey(resume))}')">📄 生成报告</button>
+                    ${resume.organized_text ? `<button class="btn btn-default btn-sm" onclick="showOrganizedResume(${idx})"> AI整理简历</button>` : ''}
+                    <button class="btn btn-default btn-sm" onclick="generateReport('${encodeURIComponent(resumeKey(resume))}')"> 生成报告</button>
                     ${resume.detail_url ? `<a href="${resume.detail_url}" target="_blank" class="btn btn-default btn-sm">查看简历</a>` : ''}
                 </div>
             </div>` : `
-            <div style="display:flex;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid #eee">
-                <button class="btn btn-default btn-sm" onclick="generateReport('${encodeURIComponent(resumeKey(resume))}')">📄 生成报告</button>
+            <div class="candidate-actions" style="display:flex;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid #eee">
+                <button class="btn btn-default btn-sm" onclick="generateReport('${encodeURIComponent(resumeKey(resume))}')"> 生成报告</button>
             </div>`}
         </div>`;
     });
@@ -321,15 +302,15 @@ async function generateReport(encodedKey) {
     modal.innerHTML = `
         <div style="background:#fff;border-radius:12px;width:92%;max-width:760px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.2)">
             <div style="display:flex;justify-content:space-between;align-items:center;padding:20px 24px 12px;border-bottom:1px solid #eee">
-                <h3 style="margin:0">📄 推荐报告</h3>
-                <button onclick="document.getElementById('reportModal').remove()" style="background:none;border:none;font-size:20px;cursor:pointer">✕</button>
+                <h3 style="margin:0"> 推荐报告</h3>
+                <button onclick="document.getElementById('reportModal').remove()" style="background:none;border:none;font-size:20px;cursor:pointer"></button>
             </div>
             <div id="reportBody" style="padding:20px 24px;overflow:auto;flex:1">
                 <div style="text-align:center;padding:40px;color:#999">正在生成…</div>
             </div>
             <div style="padding:12px 24px 20px;border-top:1px solid #eee;display:flex;gap:8px;justify-content:flex-end">
                 <button class="btn btn-default" onclick="document.getElementById('reportModal').remove()">关闭</button>
-                <button class="btn btn-primary" id="downloadReportBtn" style="display:none" onclick="downloadReport()">⬇️ 下载 Word</button>
+                <button class="btn btn-primary" id="downloadReportBtn" style="display:none" onclick="downloadReport()">⬇ 下载 Word</button>
             </div>
         </div>`;
     document.body.appendChild(modal);
@@ -349,7 +330,7 @@ async function generateReport(encodedKey) {
         const v = result.data.validation || {};
         const warn = (!v.ok) ? `
             <div style="background:#fff7e6;border:1px solid #ffd591;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:#ad6800">
-                ⚠️ 有 ${(v.need_human || []).length} 项需要人工确认后再发给客户
+                 有 ${(v.need_human || []).length} 项需要人工确认后再发给客户
                 ${(v.need_human || []).length ? '：' + v.need_human.join('、') : ''}
             </div>` : '';
         body.innerHTML = warn + `<div style="line-height:1.75;font-size:13.5px;color:#333">${miniMarkdown(result.data.markdown)}</div>`;
@@ -389,20 +370,21 @@ function showOrganizedResume(idx) {
     modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
 
     const score = (resume.score100 || resume.analysis || {}).total_score || 0;
-    const scoreColor = score >= 80 ? '#52c41a' : score >= 60 ? '#faad14' : '#ff4d4f';
+    const hasScore = resume._has_score ?? Boolean(resume.score100 || resume.analysis);
+        const scoreColor = !hasScore ? '#8c967f' : score >= 80 ? '#52c41a' : score >= 60 ? '#faad14' : '#ff4d4f';
 
     modal.innerHTML = `
         <div style="background:#fff;border-radius:12px;width:90%;max-width:700px;max-height:85vh;overflow:auto;padding:24px;box-shadow:0 8px 32px rgba(0,0,0,0.2)">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-                <h3 style="margin:0">📋 AI 整理的简历</h3>
-                <button onclick="this.closest('div[style*=fixed]').remove()" style="background:none;border:none;font-size:20px;cursor:pointer">✕</button>
+                <h3 style="margin:0"> AI 整理的简历</h3>
+                <button onclick="this.closest('div[style*=fixed]').remove()" style="background:none;border:none;font-size:20px;cursor:pointer"></button>
             </div>
             <div style="display:flex;gap:12px;margin-bottom:16px;padding:12px;background:#f8f9fa;border-radius:8px">
-                <div><strong>${resume.name || '未知'}</strong></div>
-                <div style="color:#666">${resume.title || ''}</div>
+                <div><strong>${escapeHTML(resume.name || '未知')}</strong></div>
+                <div style="color:#666">${escapeHTML(resume.title || '')}</div>
                 <div style="color:${scoreColor};font-weight:700;margin-left:auto">${score}分</div>
             </div>
-            ${resume.detail_url ? `<div style="margin-bottom:12px"><a href="${resume.detail_url}" target="_blank" style="color:#4a6cf7;font-size:12px">🔗 查看原始简历</a></div>` : ''}
+            ${resume.detail_url ? `<div style="margin-bottom:12px"><a href="${resume.detail_url}" target="_blank" style="color:#4a6cf7;font-size:12px"> 查看原始简历</a></div>` : ''}
             <div style="white-space:pre-wrap;line-height:1.8;font-size:13px;color:#333;background:#fafafa;padding:16px;border-radius:8px;border:1px solid #eee">${resume.organized_text}</div>
         </div>
     `;
