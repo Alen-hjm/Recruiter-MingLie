@@ -1,12 +1,14 @@
 """One sentence reaches real task services; only browser and model replies are fictional."""
 import json
+import pytest
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
 
-def test_one_sentence_runs_collection_scoring_and_recommendation(logged_in_client, user_id, monkeypatch):
+@pytest.mark.parametrize("source", ["workspace", "extension"])
+def test_one_sentence_runs_collection_scoring_and_recommendation(logged_in_client, user_id, monkeypatch, source):
     from app import models, agent_memory
     from app.services import scoring
     from app.web import api_agent
@@ -81,10 +83,13 @@ def test_one_sentence_runs_collection_scoring_and_recommendation(logged_in_clien
     try:
         models.update_settings(user_id, llm_api_key='fake-local-key',
             llm_base_url=f'http://127.0.0.1:{server.server_port}/v1', llm_model='local-fixture')
-        response = logged_in_client.post('/api/chat/run', json={'message': goal})
+        from app.auth import create_token
+        prefix = '/api/extension/chat' if source == 'extension' else '/api/chat'
+        headers = {'X-API-Token': create_token(user_id, 'fictional extension')} if source == 'extension' else {}
+        response = logged_in_client.post(prefix + '/run', headers=headers, json={'message': goal})
         assert response.status_code == 202
         assert completed.wait(25), 'Local assistant workflow did not finish'
-        run = logged_in_client.get('/api/chat/run').get_json()['data']
+        run = logged_in_client.get(prefix + '/run', headers=headers).get_json()['data']
         assert run['status'] == 'done'
         assert run['scrape']['result_count'] == run['score']['total_count'] == 10
         assert set(run['completed_phases']) == {'understanding', 'searching', 'evaluating', 'recommending'}
@@ -94,7 +99,7 @@ def test_one_sentence_runs_collection_scoring_and_recommendation(logged_in_clien
         assert not runtimes[0].get('quick_filter')
         job = models.get_job(run['job_id'])
         assert job['job_description'] == goal
-        history = logged_in_client.get('/api/chat/history').get_json()['data']
+        history = logged_in_client.get(prefix + '/history', headers=headers).get_json()['data']
         evidence = history[-1]['details'][0]['result']['data']
         assert evidence['score']['task_id'] == run['score_task_id']
         assert len(evidence['candidates']['recommended']) == 10

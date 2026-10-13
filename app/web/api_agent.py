@@ -139,11 +139,14 @@ def _run_chat_background(app, user_id, run_id, message):
 @bp.route("/chat/run", methods=["GET", "POST"])
 @login_required
 def api_chat_run():
+    return chat_run_for_user(current_user.id)
+
+
+def chat_run_for_user(uid):
     """One background turn per user; page changes never resubmit a running turn.
 
     Like chat history, run state is process-local and expires on server restart.
     """
-    uid = current_user.id
     if request.method == "GET":
         with _run_lock:
             run = copy.deepcopy(_agent_runs.get(uid))
@@ -181,12 +184,16 @@ def api_chat_run():
 @bp.route("/chat/clear", methods=["POST"])
 @login_required
 def api_chat_clear():
+    return clear_chat_for_user(current_user.id)
+
+
+def clear_chat_for_user(uid):
     with _run_lock:
-        run = _agent_runs.get(current_user.id)
+        run = _agent_runs.get(uid)
         if run and run["status"] == "running":
             return jsonify(success=False, error="当前需求正在处理，完成后可清空对话"), 409
-        _agent_runs.pop(current_user.id, None)
-        _agent_sessions.pop(_session_key(current_user.id), None)
+        _agent_runs.pop(uid, None)
+        _agent_sessions.pop(_session_key(uid), None)
     return jsonify({"success": True})
 
 

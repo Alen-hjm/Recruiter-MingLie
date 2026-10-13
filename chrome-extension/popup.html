@@ -1,163 +1,35 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      width: 380px;
-      font-family: -apple-system, "Microsoft YaHei", sans-serif;
-      background: #1a1a2e;
-      color: #e0e0e0;
-      font-size: 13px;
-    }
-    .header {
-      background: linear-gradient(135deg, #16213e, #0f3460);
-      padding: 14px 16px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    .header .logo {
-      width: 32px; height: 32px;
-      border-radius: 8px;
-      background: linear-gradient(135deg, #533483, #0f3460);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 16px;
-      font-weight: 700;
-      color: #fff;
-    }
-    .header .title { font-size: 15px; font-weight: 600; }
-    .header .sub { font-size: 11px; color: #888; }
-
-    .section { padding: 12px 16px; border-bottom: 1px solid #2a2a4a; }
-    .section-title { font-size: 12px; color: #888; margin-bottom: 8px; }
-
-    .config-row {
-      display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
-    }
-    .config-row label { min-width: 60px; font-size: 12px; color: #aaa; }
-    .config-row input, .config-row select {
-      flex: 1; padding: 5px 8px;
-      background: #16213e; border: 1px solid #2a2a4a;
-      border-radius: 4px; color: #e0e0e0; font-size: 12px;
-    }
-    .config-row input:focus, .config-row select:focus {
-      outline: none; border-color: #533483;
-    }
-
-    .btn {
-      padding: 8px 16px;
-      border: none; border-radius: 6px;
-      font-size: 13px; font-weight: 500;
-      cursor: pointer; transition: all 0.2s;
-    }
-    .btn-primary {
-      background: linear-gradient(135deg, #533483, #0f3460);
-      color: #fff;
-    }
-    .btn-primary:hover { opacity: 0.9; }
-    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
-    .btn-stop { background: #cc6666; color: #fff; }
-    .btn-sm { padding: 4px 10px; font-size: 11px; }
-
-    .status-bar {
-      display: flex; gap: 12px; padding: 10px 16px;
-      background: #16213e; border-bottom: 1px solid #2a2a4a;
-    }
-    .status-item { text-align: center; flex: 1; }
-    .status-num { font-size: 20px; font-weight: 700; color: #00d7ff; }
-    .status-label { font-size: 10px; color: #888; margin-top: 2px; }
-
-    .log {
-      max-height: 180px; overflow-y: auto;
-      padding: 8px 16px; font-size: 11px;
-      font-family: "Cascadia Code", "Consolas", monospace;
-    }
-    .log-entry { padding: 2px 0; border-bottom: 1px solid #1a1a2e; }
-    .log-ok { color: #b5bd68; }
-    .log-err { color: #cc6666; }
-    .log-info { color: #81a2be; }
-    .log-dim { color: #666; }
-
-    .actions { padding: 12px 16px; display: flex; gap: 8px; }
-
-    .server-status {
-      display: inline-block;
-      width: 8px; height: 8px;
-      border-radius: 50%;
-      margin-right: 4px;
-    }
-    .server-online { background: #b5bd68; }
-    .server-offline { background: #cc6666; }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <div class="logo">猎</div>
-    <div>
-      <div class="title">明猎 - 简历抓取</div>
-      <div class="sub">
-        <span class="server-status" id="serverDot"></span>
-        <span id="serverStatus">检测中...</span>
-      </div>
+  <head>
+    <meta charset="utf-8" />
+    <title>明猎 · 招聘助手</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+    <style>
+      body {
+        width: 340px;
+        height: auto;
+        padding: 22px;
+        gap: 18px;
+      }
+      .popup-brand {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="popup-brand">
+      <img src="brand-mark.svg" width="42" height="42" alt="" />
+      <h2>明猎招聘助手</h2>
     </div>
-  </div>
-
-  <!-- 配置 -->
-  <div class="section">
-    <div class="section-title">🔑 扩展令牌（网页端「设置」页生成，推荐）</div>
-    <div class="config-row">
-      <label>令牌</label>
-      <input type="password" id="apiTokenInput" placeholder="ml_...（网页端设置页生成）">
-    </div>
-    <div class="section-title">🔑 LLM Key（可选，仅直连评分用）</div>
-    <div class="config-row">
-      <label>Key</label>
-      <input type="password" id="apiKeyInput" placeholder="输入你的 LLM API Key">
-      <button class="btn btn-sm btn-primary" id="btnSaveKey">保存</button>
-    </div>
-    <div class="section-title">⚡ DeepSeek 直连（可选，填了「提交评分」走直连流式）</div>
-    <div class="config-row">
-      <label>DS Key</label>
-      <input type="password" id="dsKeyInput" placeholder="sk-...（DeepSeek API Key）">
-    </div>
-    <div class="section-title">📋 抓取配置</div>
-    <div class="config-row">
-      <label>岗位</label>
-      <select id="jobSelect">
-        <option value="">加载中...</option>
-      </select>
-    </div>
-    <div class="config-row">
-      <label>页数</label>
-      <input type="number" id="maxPages" value="3" min="1" max="10">
-    </div>
-  </div>
-
-  <!-- 状态栏 -->
-  <div class="status-bar">
-    <div class="status-item">
-      <div class="status-num" id="collectedCount">0</div>
-      <div class="status-label">已收集</div>
-    </div>
-  </div>
-
-  <!-- 操作按钮 -->
-  <div class="actions">
-    <button class="btn btn-primary" id="btnScrape" style="flex:1">📋 抓取当前页</button>
-    <button class="btn btn-primary btn-sm" id="btnSubmit">📤 提交评分</button>
-  </div>
-
-  <!-- 日志 -->
-  <div class="section" style="padding-bottom:4px">
-    <div class="section-title">📝 运行日志</div>
-  </div>
-  <div class="log" id="logArea"></div>
-
-  <script src="deepseek.js"></script>
-  <script src="popup.js"></script>
-</body>
+    <p class="muted">
+      在浏览器旁描述需求、分析当前简历，并继续跟进合适的人选。
+    </p>
+    <button class="btn primary" id="openPanel">打开招聘助手 ↗</button>
+    <p id="popupStatus" class="tiny" role="status">
+      点击工具栏图标也可直接打开侧边栏。
+    </p>
+    <script src="popup.js"></script>
+  </body>
 </html>

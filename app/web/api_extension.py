@@ -526,9 +526,23 @@ def api_chat():
 @bp.route("/chat/clear", methods=["POST"])
 @require_api_token
 def api_chat_clear():
-    from .api_agent import _agent_sessions, _session_key
-    _agent_sessions.pop(_session_key(_user().id), None)
-    return jsonify({"success": True})
+    from .api_agent import clear_chat_for_user
+    return clear_chat_for_user(_user().id)
+
+
+@bp.route("/chat/run", methods=["GET", "POST"])
+@require_api_token
+def api_chat_run():
+    """Reuse the workspace run, progress and concurrency guard for this token owner."""
+    from .api_agent import chat_run_for_user
+    return chat_run_for_user(_user().id)
+
+
+@bp.route("/chat/history")
+@require_api_token
+def api_chat_history():
+    from .api_agent import _get_history
+    return jsonify(success=True, data=_get_history(_user().id))
 
 
 # ================================================================== 知识库

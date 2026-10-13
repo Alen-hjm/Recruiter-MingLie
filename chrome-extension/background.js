@@ -2,13 +2,10 @@
  * 明猎 - Background Service Worker
  */
 
-// 点击扩展图标时打开侧边栏
-chrome.action.onClicked.addListener(async (tab) => {
-  await chrome.sidePanel.open({ windowId: tab.windowId });
-});
-
-// 默认侧边栏行为
-chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+// Chrome handles the user gesture once; avoid opening the panel twice.
+chrome.sidePanel
+  .setPanelBehavior({ openPanelOnActionClick: true })
+  .catch(console.error);
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log("[明猎] 扩展已安装");
