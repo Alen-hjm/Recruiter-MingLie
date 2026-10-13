@@ -1,90 +1,58 @@
 # 明猎 · Recruiter MingLie
 
-明猎是一个面向猎头和招聘顾问的桌面招聘助手。它把招聘入口收敛成一句话：你描述岗位、城市和目标数量，助手负责理解需求、搜寻候选人、分析匹配度，并整理出下一步可沟通的人选。
+**从一句招聘需求开始，找到值得沟通的人。**
 
-> 这是一个个人招聘提效工具。使用第三方平台数据时，请遵守平台服务条款、隐私要求和适用法律。
+明猎是面向猎头和招聘顾问的 AI 招聘助手。输入岗位、城市和招聘目标后，系统可以协助完成岗位理解、候选人搜寻、简历匹配和推荐整理，并在候选人管道中继续跟进。
 
-## 产品定位
+> 明猎用于辅助招聘判断，不替代人工核实或录用决定。使用第三方平台数据前，请确认已获得必要授权，并遵守目标平台的服务条款和适用法律。
 
-明猎的主流程是：
+[快速启动](#快速启动) · [使用流程](#使用流程) · [模型接入](#模型接入) · [浏览器扩展](#浏览器扩展) · [安全与边界](#安全与边界)
 
-```text
-一句话需求 → 岗位理解 → 自动搜寻 → 匹配分析 → 推荐与跟进
-```
+## 能做什么
 
-例如：
+- 用自然语言描述招聘需求，不必先填写复杂的专业参数。
+- 按岗位、关键词、城市和目标数量创建候选人搜寻任务。
+- 对已获取的简历进行岗位匹配分析，展示推荐理由和待核实信息。
+- 查看候选人、招聘项目、面试进展和决策报告。
+- 在任务中断、登录失效或需要人工验证时保留已完成结果，并支持继续处理。
+- 通过设置页接入 DeepSeek、OpenAI、通义千问、Moonshot、SiliconFlow 或其他 OpenAI 兼容服务。
 
-```text
-帮我找深圳的半导体销售总监，先收集 10 份简历，无其他要求。
-```
+## 使用流程
 
-客户只需要表达招聘目标。搜索翻页、评分口径、任务恢复等执行细节由系统内置；模型服务、平台登录和其他连接项放在“设置”中管理。
+1. 登录工作台，在设置中配置模型服务；
+2. 在招聘助手中输入一句话需求，例如：
 
-## 功能
+   ```text
+   帮我找深圳的半导体销售总监，先收集 10 份简历，无其他要求。
+   ```
 
-- **招聘助手**：通过对话启动完整招聘流程，同一页面显示真实执行阶段、数量和推荐结果。
-- **自动搜寻**：按岗位、关键词、城市和目标数量创建搜寻任务，支持逐条保存、去重和中断恢复。
-- **匹配分析**：使用岗位要求分析简历，区分推荐、待核实和未分析结果；保留原始简历，避免把缺失信息当成结论。
-- **候选人跟进**：记录待沟通、面试、通过、待定等招聘进展。
-- **决策报告**：展示匹配摘要、推荐理由和可展开的依据，可导出报告文件。
-- **多模型接入**：设置页支持 DeepSeek、OpenAI、通义千问、Moonshot、SiliconFlow，以及自定义 OpenAI 兼容接口。
-- **桌面工作台**：概览、岗位、候选人、面试、报告和任务详情通过侧边导航访问；支持快捷导航和首次登录引导。
-- **Chrome 扩展**：`chrome-extension/` 提供贴近猎聘页面的辅助入口，使用独立访问令牌连接本地后端。
+3. 助手提取岗位和搜寻条件，创建或继续对应招聘项目；
+4. 首次搜寻时在采集浏览器中完成平台登录；
+5. 查看搜寻结果、匹配依据和推荐人选，再进行人工核实与后续沟通。
 
-## 界面与交互
+搜索、翻页、任务恢复和评分执行参数由系统处理。需要调整模型或平台连接时，再进入设置页面。
 
-前端使用 Jinja 模板、原生 CSS 和 JavaScript，不需要 React 构建链。助手首页是产品主入口，其他页面围绕招聘结果和下一步行动组织。
+## 快速启动
 
-界面参考 Aceternity UI 的交互思路，用原生方式实现了 Aurora 背景、Tracing Beam、Spotlight、3D Card、Magnetic Button 和 Multi Step Loader 等局部效果：
-
-- 招聘入口有流动渐变、需求到人才的连线和指针视差；
-- 发送按钮、输入框和示例入口有即时反馈；
-- 项目、人选和报告卡片支持轻微倾斜、指针高光和进入视口动画；
-- 招聘步骤只在服务端阶段变化后点亮，不伪造百分比；
-- 支持 `prefers-reduced-motion`，切换页面不会等待整页退场动画。
-
-完整的前端设计和验收说明见 [docs/frontend-workspace.md](docs/frontend-workspace.md)。
-
-## 项目结构
-
-```text
-app/
-├─ web/                  页面路由与 API Blueprint
-├─ services/             搜寻、评分等后台服务
-├─ agent.py              对话式招聘 Agent
-├─ agent_tools.py        Agent 可调用工具
-├─ scraper_liepin.py     猎聘采集器
-├─ scrapling_session.py  可选 Scrapling 会话适配器
-├─ interaction_pacing.py 操作节奏控制
-└─ models.py             SQLite 数据模型
-templates/               Jinja 页面
-static/css/              工作台、登录和动效样式
-static/js/               工作台、助手和引导交互
-chrome-extension/        Chrome MV3 扩展
-config/report_templates/ 推荐报告模板
-docs/                    采集、恢复和前端验收记录
-tests/                   单元、Web 和流程测试
-```
-
-## 快速开始
-
-需要 Python 3.12 或兼容版本。
+需要 Python 3.12 或兼容版本，以及 Chromium 浏览器运行环境。
 
 ```powershell
+git clone https://github.com/Alen-hjm/Recruiter-MingLie.git
+cd Recruiter-MingLie
+
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install -r requirements.txt
 python -m playwright install chromium
+
 python run.py
 ```
 
-打开 <http://127.0.0.1:5000>，注册账号后进入工作台。
+打开 <http://127.0.0.1:5000>，注册账号后使用。服务默认只监听本机地址，适合个人桌面使用。
 
-默认只监听本机回环地址。如果要在局域网使用，请明确设置 `MINGLIE_HOST`，同时配置持久化的 `MINGLIE_SECRET_KEY`，不要直接暴露候选人数据服务。
+### 配置模型
 
-## 模型配置
-
-可以在“设置 → 模型服务”中填写服务商、接口地址、模型名和密钥，也可以使用环境变量：
+模型可以在“设置 → 模型服务”中配置，也可以通过环境变量提供默认值：
 
 ```powershell
 $env:MINGLIE_LLM_API_KEY = "你的 API Key"
@@ -93,69 +61,69 @@ $env:MINGLIE_LLM_MODEL = "deepseek-chat"
 python run.py
 ```
 
-也可以复制 `.env.example` 作为配置参考。设置页保存的字段优先于环境变量，空字段回落到环境变量。密钥不会写入浏览器的 `sessionStorage`，保存后页面只显示掩码状态。
-
-自定义服务需要兼容项目使用的 OpenAI Chat Completions 接口。没有模型配置时，仍可使用岗位、搜寻和候选人管理页面，但自动分析不可用。
+设置页保存的配置优先于环境变量。自定义服务需要兼容项目使用的 OpenAI Chat Completions 接口。没有模型配置时，仍可以管理岗位、搜寻任务和候选人，但无法执行自动匹配分析。
 
 ## 猎聘搜寻
 
-默认模式是独立 Playwright 浏览器：
+默认使用独立浏览器会话执行搜寻。首次执行时，系统会打开采集浏览器，请在其中完成登录。
 
 ```powershell
+# 默认模式
 $env:MINGLIE_SCRAPE_MODE = "browser"
 python run.py
 ```
 
-首次搜寻时在采集浏览器中人工登录。遇到登录失效、空白页或平台验证，任务会进入“待人工处理”，已保存的结果会保留，确认恢复访问后可以继续任务。
-
-项目也提供可选 Scrapling 会话适配器：
+项目也提供可选的 Scrapling 会话适配器：
 
 ```powershell
 python -m pip install -r requirements-scrapling.txt
 python -m playwright install chromium
+
 $env:MINGLIE_SCRAPE_MODE = "scrapling"
 $env:MINGLIE_SCRAPLING_ENGINE = "stealth"
 python run.py
 ```
 
-Scrapling 的实站验收目前只覆盖有限的人工登录、搜索、两页翻页和单份详情读取。它不代表可以规避所有平台风控，也不代表大批量、长期运行或完整 JD 筛选已经验收。详细边界见 [Scrapling 验收记录](docs/scrapling-validation.md) 和 [中断恢复说明](docs/collection-recovery.md)。
+空白页、登录失效或平台验证会使任务进入待处理状态，已保存的结果会保留。Scrapling 目前只完成有限的人工登录、搜索、翻页和详情读取验证，不代表可以规避平台风控，也不代表长期批量采集已经验收。详见 [采集验收记录](docs/scrapling-validation.md) 和 [任务恢复说明](docs/collection-recovery.md)。
 
-## Chrome 扩展
+## 浏览器扩展
 
-1. 打开 `chrome://extensions/`，开启“开发者模式”；
-2. 选择“加载已解压的扩展程序”，指定 `chrome-extension/`；
-3. 在明猎“设置 → 扩展连接”生成访问令牌；
-4. 将令牌填入扩展设置。
+项目包含一个 Chrome MV3 扩展，可在猎聘页面旁打开招聘助手：
 
-扩展访问令牌与模型 API Key 相互独立。令牌可以撤销，后端只保存摘要；生产环境建议设置 `MINGLIE_EXTENSION_ORIGINS`，限制允许访问的扩展来源。
+1. 打开 `chrome://extensions/`；
+2. 开启“开发者模式”；
+3. 选择“加载已解压的扩展程序”，指定 `chrome-extension/` 目录；
+4. 在工作台“设置 → 扩展连接”生成访问令牌，并填入扩展。
+
+扩展访问令牌与模型 API Key 相互独立。令牌可撤销，后端不保存令牌明文。
 
 ## 本地预览
 
-项目包含隔离的前端预览服务，使用虚构简历和本地模拟助手，不访问真实猎聘、不调用外部模型：
+仓库提供隔离预览环境，用于查看工作台、动效和助手流程。预览使用虚构简历和本地模拟助手，不访问真实猎聘或外部模型。
 
 ```powershell
 $env:PYTHONIOENCODING = "utf-8"
 python data/ui-redesign/preview_server.py
 ```
 
-打开 <http://127.0.0.1:5088/>，预览账号为：
+打开 <http://127.0.0.1:5088/>：
 
 ```text
 用户名：preview
 密码：preview-local-2026
 ```
 
-预览只用于检查页面、导航、动效和对话状态，不能代表真实采集结果。
+预览结果不代表真实采集或模型分析结果。
 
-## 测试
+## 开发与测试
+
+运行完整测试：
 
 ```powershell
 python -m pytest -q
 ```
 
-测试覆盖认证与用户隔离、岗位和候选人流程、任务恢复、评分链路、模型配置、扩展鉴权、架构依赖方向及本地模拟招聘流程。
-
-如果只检查助手工作台：
+只检查招聘助手工作台：
 
 ```powershell
 python -m pytest tests/test_assistant_workspace.py tests/test_onboarding_overview.py -q
@@ -164,26 +132,24 @@ node --check static/js/workspace.js
 node --check static/js/workspace-motion.js
 ```
 
-## 数据与安全
+前端使用 Jinja 模板、原生 CSS 和 JavaScript，不需要 React 或前端构建步骤。后端入口为 `run.py`，业务页面和接口位于 `app/web/`，运行数据默认保存在本地 SQLite 和浏览器用户目录中。
 
-以下内容只保存在本地运行目录，不应提交到 Git：
+## 安全与边界
 
-- `data/`：SQLite 数据库、简历和任务结果；
-- `browser_data/`：浏览器登录态和 Cookie；
-- `.env`：环境变量和模型密钥；
-- `screenshots/`：采集截图和诊断文件。
+- `data/`、`browser_data/`、`.env` 和截图目录可能包含简历、登录态或密钥，不应提交到 Git。
+- 默认只监听 `127.0.0.1`。对外提供服务前，应配置会话密钥、HTTPS、访问控制和数据备份。
+- 启用远程模型后，相关简历文本会发送到所配置的模型服务商，请先确认授权和数据保留政策。
+- 城市和关键词用于缩小搜寻范围，不等于系统已经验证 JD 的全部硬性条件。
+- 匹配分和推荐理由是辅助信息，最终招聘判断需要人工核对。
+- 当前 Agent 回合使用单进程后台线程，服务重启不会恢复正在执行的对话回合；已经保存到数据库的岗位、简历和任务仍然保留。
 
-默认数据目录和浏览器目录由 `.env.example` 中的 `MINGLIE_DATA_DIR`、`MINGLIE_BROWSER_DIR` 控制。请使用独立测试数据目录验证采集流程，不要把真实简历、Cookie 或密钥发到聊天、日志或版本库。
+## 文档
 
-## 当前边界
+- [前端工作台说明](docs/frontend-workspace.md)
+- [任务恢复说明](docs/collection-recovery.md)
+- [Scrapling 采集验收](docs/scrapling-validation.md)
+- [猎聘空白页调查](docs/liepin-blank-investigation.md)
 
-- Agent 回合使用进程内线程，服务重启后不会恢复正在运行的对话回合；已落库的岗位、简历和任务仍然保留。
-- 当前部署面向单机桌面使用，不是分布式任务队列。
-- 城市和关键词用于缩小搜寻范围，不等于模型已经验证全部 JD 硬性条件。
-- 报告中的匹配分是沟通参考，不是自动录用结论；招聘决定仍需人工核对。
-- 第三方平台页面、登录状态和可访问范围可能变化，真实采集结果以当次任务状态为准。
+## 许可与使用
 
-## 许可证与使用
-
-本项目当前作为个人招聘业务提效工具维护。使用前请确认目标平台授权范围、候选人隐私处理方式和所在地区的法律要求。
-
+本项目当前作为个人招聘业务提效工具维护。仓库未附带开源许可证；如需在商业环境或团队内分发，请先确认代码、第三方依赖、平台数据和候选人信息的使用权限。
