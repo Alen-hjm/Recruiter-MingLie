@@ -149,6 +149,9 @@ function switchPanel(name) {
   if (!["chat", "resumes", "pipeline", "settings"].includes(name)) return;
   state.scroll[state.panel] = $("content").scrollTop;
   state.panel = name;
+  document.querySelector(".nav").style.setProperty(
+    "--tab-index", ["chat", "resumes", "pipeline", "settings"].indexOf(name),
+  );
   document
     .querySelectorAll(".panel")
     .forEach((el) => el.classList.toggle("active", el.id === "panel-" + name));
@@ -313,6 +316,7 @@ function renderRun() {
   const run = state.run;
   $("runCard").hidden = !run;
   const running = run?.status === "running";
+  $("runCard").dataset.running = String(running);
   $("btnSend").disabled = running || state.sending;
   $("clearChat").disabled = running || state.sending;
   $("composerHint").textContent = running
@@ -329,9 +333,11 @@ function renderRun() {
     );
     el.classList.toggle(
       "current",
-      run.phase === el.dataset.phase ||
-        (run.phase === "planning" && el.dataset.phase === "understanding"),
+      running && (run.phase === el.dataset.phase ||
+        (run.phase === "planning" && el.dataset.phase === "understanding")),
     );
+    if (el.classList.contains("current")) el.setAttribute("aria-current", "step");
+    else el.removeAttribute("aria-current");
   });
   const counts = [];
   if (run.scrape) counts.push(`已收集 ${run.scrape.result_count || 0} 份`);
@@ -435,6 +441,7 @@ async function clearChat() {
 }
 function resizeInput() {
   const el = $("chatInput");
+  $("inputPrompts").hidden = el.value.length > 0;
   el.style.height = "auto";
   el.style.height = Math.min(110, el.scrollHeight) + "px";
 }
@@ -819,6 +826,17 @@ async function saveSettings(event) {
   }
 }
 async function init() {
+  const syncVisibility = () =>
+    document.body.classList.toggle("is-background", document.hidden);
+  document.addEventListener("visibilitychange", syncVisibility);
+  syncVisibility();
+  document.addEventListener("click", (event) => {
+    if (!$("moreMenu").contains(event.target)) $("moreMenu").open = false;
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") $("moreMenu").open = false;
+  });
+
   document
     .querySelectorAll(".tab")
     .forEach((el) => (el.onclick = () => switchPanel(el.dataset.panel)));
@@ -826,7 +844,10 @@ async function init() {
     .querySelectorAll("[data-prompt]")
     .forEach((el) => (el.onclick = () => draft(el.dataset.prompt)));
   $("btnSend").onclick = sendChat;
-  $("clearChat").onclick = clearChat;
+  $("clearChat").onclick = () => {
+    $("moreMenu").open = false;
+    clearChat();
+  };
   $("analyzePage").onclick = analyzePage;
   $("retrySubmit").onclick = submitBatch;
   $("clearCollected").onclick = async () => {
@@ -850,7 +871,10 @@ async function init() {
   $("openModelSettings").onclick = () => openWorkspace("/settings#model");
   $("connectionState").onclick = () => switchPanel("settings");
   $("guideConnect").onclick = () => switchPanel("settings");
-  $("showGuide").onclick = guide;
+  $("showGuide").onclick = () => {
+    $("moreMenu").open = false;
+    guide();
+  };
   $("settingsGuide").onclick = guide;
   $("dismissGuide").onclick = () => {
     $("onboarding").hidden = true;

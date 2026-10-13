@@ -54,8 +54,10 @@
   function register(el) {
     if (registered.has(el)) return;
     registered.add(el);
-    if (el.matches(cards)) el.classList.add('motion-card');
     visibility.observe(el);
+    // These surfaces now use the imported SpotlightCard port; don't stack tilt/glow.
+    if (el.matches('.recent-mission,.overview-project,.assistant-person')) return;
+    if (el.matches(cards)) el.classList.add('motion-card');
     el.addEventListener('pointerenter', () => {
       if (reduced.matches || !fine.matches || el.disabled) return;
       active.set(el, el.getBoundingClientRect()); el.classList.add('motion-hover');

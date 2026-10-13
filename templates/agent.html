@@ -11,7 +11,7 @@
   {% if config.UI_PREVIEW %}<div class="preview-label">演示空间 · 使用虚构简历与本地模拟助手</div>{% endif %}
   <div class="assistant-grid">
     <section class="assistant-stage" aria-label="招聘对话">
-      <div class="assistant-landing" id="assistant-landing" data-spotlight>
+      <div class="assistant-landing" id="assistant-landing" data-ui-spotlight>
         <div class="aurora-wash" aria-hidden="true"></div>
         <div class="landing-copy"><div class="assistant-kicker"><span></span> 明猎 · 招聘助手</div>
           <h1><span>你说需求。</span><br><span>明猎，<em>去找对的人。</em></span></h1>
@@ -28,7 +28,7 @@
       </div>
       <div id="conversation-feed" class="conversation-feed" role="log" aria-live="polite" aria-label="对话记录" hidden></div>
       <div class="assistant-composer-wrap">
-        <form id="assistant-form" class="assistant-composer">
+        <form id="assistant-form" class="assistant-composer" data-ui-star-border>
           <label for="chat-input" class="composer-label">这次，你想招谁？</label>
           <textarea id="chat-input" rows="2" maxlength="12000" placeholder="帮我找深圳的半导体销售总监，先收集 10 份简历，无其他要求。" aria-describedby="composer-hint"></textarea>
           <div class="composer-bottom"><span id="composer-hint"><span class="composer-spark">✧</span> 支持粘贴 JD</span><button type="submit" class="assistant-send" id="btn-send"><span>交给明猎</span><span class="send-arrow">↗</span></button></div>

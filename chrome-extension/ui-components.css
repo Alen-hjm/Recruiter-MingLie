@@ -1,0 +1,73 @@
+/* React Bits SpotlightCard + StarBorder, adapted for Minglie.
+ * Copyright (c) 2025 David Haz. MIT + Commons Clause.
+ * See chrome-extension/THIRD_PARTY_NOTICES.md and docs/ui-components.md.
+ */
+.ml-spotlight {
+  position: relative;
+  isolation: isolate;
+  --mouse-x: 50%;
+  --mouse-y: 50%;
+  --spotlight-color: rgba(135, 115, 197, .13);
+}
+.ml-spotlight-light {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(260px circle at var(--mouse-x) var(--mouse-y), var(--spotlight-color), transparent 80%);
+  opacity: 0;
+  transition: opacity .4s ease;
+  pointer-events: none;
+  z-index: 0;
+}
+.ml-spotlight:hover > .ml-spotlight-light,
+.ml-spotlight:focus-within > .ml-spotlight-light { opacity: .6; }
+.ml-star-border { position: relative; isolation: isolate; }
+.ml-star-edge {
+  position: absolute;
+  inset: -1px;
+  padding: 1.5px;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity .25s;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+.ml-star-top, .ml-star-bottom {
+  position: absolute;
+  width: 300%;
+  height: 100%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, #a38ad8, #92a9db 8%, transparent 22%);
+  animation-duration: 4s;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+  animation-play-state: paused;
+}
+.ml-star-bottom { bottom: -50%; right: -250%; animation-name: ml-star-bottom; }
+.ml-star-top { top: -50%; left: -250%; animation-name: ml-star-top; }
+.ml-star-border:focus-within > .ml-star-edge { opacity: 1; }
+.ml-star-border:focus-within .ml-star-top,
+.ml-star-border:focus-within .ml-star-bottom { animation-play-state: running; }
+@keyframes ml-star-bottom {
+  0% { transform: translate(0%, 0%); opacity: 1; }
+  100% { transform: translate(-100%, 0%); opacity: 0; }
+}
+@keyframes ml-star-top {
+  0% { transform: translate(0%, 0%); opacity: 1; }
+  100% { transform: translate(100%, 0%); opacity: 0; }
+}
+/* Replace old overlapping shine, preserving the original layout and focus ring. */
+.assistant-landing.ml-spotlight:after,
+.assistant-composer.ml-star-border:after,
+.ml-spotlight.motion-card:after { display: none; }
+.ml-spotlight.motion-card { transform: none; }
+.ml-paused .ml-star-top, .ml-paused .ml-star-bottom,
+.ml-offscreen .ml-star-top, .ml-offscreen .ml-star-bottom { animation-play-state: paused !important; }
+@media (prefers-reduced-motion: reduce) {
+  .ml-spotlight-light, .ml-star-edge { display: none; }
+  .ml-star-top, .ml-star-bottom { animation: none !important; }
+}

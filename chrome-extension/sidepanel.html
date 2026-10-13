@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>明猎 · 招聘助手</title>
     <link rel="stylesheet" href="sidepanel.css" />
+    <link rel="stylesheet" href="ui-components.css" />
   </head>
   <body>
     <header class="header">
@@ -16,8 +17,73 @@
         title="打开工作台"
         aria-label="打开工作台"
       >
-        ↗
+        <svg
+          class="ui-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.65"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path
+            d="M14 4h6v6M20 4l-9 9M10 5H5a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1v-5"
+          />
+        </svg>
       </button>
+      <details class="more-menu" id="moreMenu">
+        <summary title="更多操作" aria-label="更多操作">
+          <svg
+            class="ui-icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            fill="currentColor"
+          >
+            <circle cx="5" cy="12" r="1.5" />
+            <circle cx="12" cy="12" r="1.5" />
+            <circle cx="19" cy="12" r="1.5" />
+          </svg>
+        </summary>
+        <div class="chat-actions">
+          <button
+            id="clearChat"
+            class="text-btn"
+            title="清空与工作台共享的对话"
+          >
+            <svg
+              class="ui-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.65"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path
+                d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"
+              /></svg
+            ><span>清空会话</span></button
+          ><button id="showGuide" class="text-btn">
+            <svg
+              class="ui-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.65"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="12" r="9" />
+              <path
+                d="M9.5 9a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4M12 17h.01"
+              /></svg
+            ><span>使用引导</span>
+          </button>
+        </div>
+      </details>
     </header>
     <div class="context">
       <span class="status-dot" id="connectionDot"></span
@@ -29,12 +95,25 @@
         title="刷新连接和结果"
         aria-label="刷新连接和结果"
       >
-        ↻
+        <svg
+          class="ui-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.65"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path
+            d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 6M4 12l2 6a7 7 0 0 0 12-1"
+          />
+        </svg>
       </button>
     </div>
     <nav class="nav" aria-label="扩展导航">
       <button class="tab active" data-panel="chat" aria-current="page">
-        ✧ 助手</button
+        助手</button
       ><button class="tab" data-panel="resumes">候选人</button
       ><button class="tab" data-panel="pipeline">跟进</button
       ><button class="tab" data-panel="settings">设置</button>
@@ -42,14 +121,10 @@
     <main class="content" id="content">
       <section class="panel active" id="panel-chat" aria-label="招聘助手">
         <div id="welcome">
-          <div class="hero">
+          <div class="hero" data-ui-spotlight>
             <div class="eyebrow">MINGLIE / RECRUITING</div>
-            <div class="orbit" aria-hidden="true">
-              <i></i><i></i><span>✧</span>
-            </div>
-            <h1>下一个合适的人，<br />从一句话开始。</h1>
-            <p>说出岗位和城市，<br />让明猎继续搜寻、分析与推荐。</p>
-            <span class="hero-tag">需求 → 搜寻 → 推荐</span>
+            <h1>好的人选，从一句话开始。</h1>
+            <p>告诉明猎岗位与城市，其余交给助手。</p>
           </div>
           <div class="onboarding" id="onboarding" hidden>
             <div class="section-head">
@@ -80,31 +155,6 @@
             </ol>
             <button class="btn primary" id="guideConnect">连接明猎 ↗</button>
           </div>
-          <div class="section-head">
-            <span class="muted">从一个需求开始</span
-            ><span class="tiny">点击后可修改</span>
-          </div>
-          <div class="suggestions">
-            <button
-              class="suggestion"
-              data-prompt="帮我找深圳的半导体销售总监，先收集 10 份简历，无其他要求。"
-            >
-              <span class="suggestion-icon">⌕</span
-              ><span
-                ><strong>深圳 · 半导体销售总监</strong
-                ><small>先找 10 位候选人</small></span
-              ><span class="arrow">↗</span></button
-            ><button
-              class="suggestion"
-              data-prompt="结合当前岗位的候选人，推荐最值得优先联系的人，并说明依据和待核实信息。"
-            >
-              <span class="suggestion-icon peach">☆</span
-              ><span
-                ><strong>谁值得优先沟通？</strong
-                ><small>从已有候选人中整理推荐</small></span
-              ><span class="arrow">↗</span>
-            </button>
-          </div>
         </div>
         <div
           id="chatMessages"
@@ -125,10 +175,6 @@
           </div>
           <p class="muted" id="runDetail"></p>
           <button class="text-btn" id="runWorkspace">在工作台查看 ↗</button>
-        </div>
-        <div class="chat-actions">
-          <button id="clearChat" class="text-btn">清空会话</button
-          ><button id="showGuide" class="text-btn">使用引导</button>
         </div>
       </section>
       <section class="panel" id="panel-resumes" aria-label="候选人">
@@ -219,35 +265,87 @@
       </section>
     </main>
     <footer class="footer">
-      <div class="job-row">
-        <span class="tiny">当前岗位</span
-        ><select id="selJobGlobal" aria-label="当前岗位">
-          <option value="">新需求，无需预先选择</option>
-        </select>
-      </div>
-      <div class="collection" id="collectBar" hidden>
-        <span>待提交 <strong id="collectedCount">0</strong> 份</span
-        ><button class="text-btn" id="retrySubmit">重试</button
-        ><button class="text-btn" id="clearCollected">移除</button>
-      </div>
-      <div class="composer" id="composer">
-        <textarea
-          id="chatInput"
-          rows="2"
-          aria-label="招聘需求"
-          placeholder="说说你想招谁，或继续补充需求…"
-          maxlength="12000"
-        ></textarea>
-        <div class="composer-bottom">
-          <button
-            id="analyzePage"
-            class="text-btn"
-            title="读取当前打开的猎聘简历并提交分析"
-          >
-            ⌕ 分析当前简历</button
-          ><button id="btnSend" class="send-btn" aria-label="发送招聘需求">
-            ↑
-          </button>
+      <div class="composer-shell">
+        <div class="job-row">
+          <label class="tiny" for="selJobGlobal">岗位</label
+          ><select id="selJobGlobal" aria-label="当前岗位">
+            <option value="">新需求，无需预先选择</option>
+          </select>
+        </div>
+        <div class="collection" id="collectBar" hidden>
+          <span>待提交 <strong id="collectedCount">0</strong> 份</span
+          ><button class="text-btn" id="retrySubmit">重试</button
+          ><button class="text-btn" id="clearCollected">移除</button>
+        </div>
+        <div class="composer" id="composer" data-ui-star-border>
+          <div class="input-surface">
+            <textarea
+              id="chatInput"
+              rows="3"
+              aria-label="招聘需求"
+              placeholder="描述你的招聘需求…"
+              title="Enter 发送 · Shift + Enter 换行"
+              maxlength="12000"
+            ></textarea>
+            <div
+              class="input-prompts"
+              id="inputPrompts"
+              aria-label="招聘需求示例"
+            >
+              <button
+                type="button"
+                data-prompt="帮我找深圳的半导体销售总监，先收集 10 份简历，无其他要求。"
+                title="填入示例，可修改后发送"
+              >
+                <span>找 10 位深圳半导体销售总监</span
+                ><span class="prompt-arrow" aria-hidden="true">↗</span>
+              </button>
+              <button
+                type="button"
+                data-prompt="结合当前岗位的候选人，推荐最值得优先联系的人，并说明依据和待核实信息。"
+                title="填入示例，可修改后发送"
+              >
+                <span>推荐值得优先沟通的人选</span
+                ><span class="prompt-arrow" aria-hidden="true">↗</span>
+              </button>
+            </div>
+          </div>
+          <div class="composer-bottom">
+            <button
+              id="analyzePage"
+              class="text-btn"
+              title="读取当前打开的猎聘简历并提交分析"
+            >
+              <svg
+                class="ui-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.65"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path
+                  d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6Z"
+                />
+                <path d="M14 3v6h6M8 14h8M8 17h5" /></svg
+              ><span>分析当前简历</span></button
+            ><button id="btnSend" class="send-btn" aria-label="发送招聘需求">
+              <svg
+                class="ui-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.65"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M12 19V5m-6 6 6-6 6 6" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
       <p class="tiny footer-hint" id="composerHint">
@@ -264,6 +362,7 @@
         ><button class="btn primary" id="acceptConfirm">确认</button>
       </div>
     </dialog>
+    <script src="ui-components.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>

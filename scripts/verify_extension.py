@@ -28,6 +28,9 @@ window.fetch=async(url,options={})=>{
 })();'''
 
 def main():
+    for kind in ('css', 'js'):
+        name = f'ui-components.{kind}'
+        assert (ROOT/'static'/kind/name).read_bytes() == (ROOT/'chrome-extension'/name).read_bytes(), f'Run scripts/sync_ui_components.py: {name}'
     errors=[]
     with sync_playwright() as p:
         browser=p.chromium.launch(headless=True)
@@ -38,7 +41,18 @@ def main():
         expect(page.locator("#connectionState")).to_have_text("工作台已连接")
         expect(page.locator("#onboarding")).to_be_visible()
         page.locator("#dismissGuide").click()
+        expect(page.locator("#inputPrompts")).to_be_visible()
+        page.locator("#chatInput").fill("深圳销售")
+        expect(page.locator("#inputPrompts")).to_be_hidden()
+        # Input remains interactive with the imported decoration above it.
+        expect(page.locator(".ml-star-top")).to_have_css("animation-play-state", "running")
+        page.emulate_media(reduced_motion="reduce")
+        expect(page.locator(".ml-star-edge")).to_be_hidden()
+        page.emulate_media(reduced_motion="no-preference")
+        page.locator("#chatInput").fill("")
+        expect(page.locator("#inputPrompts")).to_be_visible()
         page.locator("[data-prompt]").first.click()
+        expect(page.locator("#inputPrompts")).to_be_hidden()
         assert page.locator("#chatInput").input_value().startswith("帮我找深圳")
         page.locator("[data-panel=resumes]").click()
         expect(page.locator(".panel.active .candidate")).to_have_count(3)
@@ -62,6 +76,8 @@ def main():
         expect(page.locator("#runLabel")).to_have_text("本轮处理完成",timeout=8000)
         assert page.locator("#chatMessages img").count()==0
         expect(page.locator("#btnSend")).to_be_enabled()
+        expect(page.locator("#runSteps .current")).to_have_count(0)
+        page.locator("#moreMenu summary").click()
         page.locator("#clearChat").click()
         expect(page.locator("#confirmDialog")).to_be_visible()
         page.locator("#cancelConfirm").click()
@@ -79,16 +95,28 @@ def main():
         page.locator("#cancelConfirm").click()
         expect(page.locator(".panel.active .candidate")).to_have_count(1)
         page.locator("[data-panel=chat]").click()
+        page.locator("#moreMenu summary").click()
         page.locator("#clearChat").click();page.locator("#acceptConfirm").click()
         expect(page.locator("#welcome")).to_be_visible()
+        # Preview a fresh home state, without status messages left by retry tests.
+        page.reload()
+        expect(page.locator("#connectionState")).to_have_text("工作台已连接")
+        page.locator("#dismissGuide").click()
         output=ROOT/"data/extension-preview";output.mkdir(parents=True,exist_ok=True)
         page.locator("#toast").wait_for(state="hidden");page.screenshot(path=str(output/"assistant.png"),animations="disabled")
+        page.locator("#chatInput").fill("帮我找深圳的半导体销售总监，先看 10 位。")
+        expect(page.locator("#inputPrompts")).to_be_hidden()
+        page.screenshot(path=str(output/"assistant-typing.png"),animations="disabled")
+        page.locator("#chatInput").fill("")
         for width in [340,400,520]:
             page.set_viewport_size({"width":width,"height":800})
             assert page.evaluate("document.documentElement.scrollWidth<=innerWidth"),width
             for tab in ["resumes","pipeline","settings","chat"]:
                 page.locator(f"[data-panel={tab}]").click()
                 assert page.evaluate("document.documentElement.scrollWidth<=innerWidth"),(width,tab)
+                expect(page.locator("#selJobGlobal")).to_be_visible()
+                if tab != "chat":
+                    expect(page.locator("#composer")).to_be_hidden()
         page.set_viewport_size({"width":400,"height":900})
         page.locator("[data-panel=settings]").click();page.screenshot(path=str(output/"settings.png"),animations="disabled")
         assert not errors,errors
@@ -119,9 +147,12 @@ def main():
                 assert worker.evaluate("chrome.runtime.getManifest().version")=="1.1.0"
                 worker.evaluate("chrome.storage.local.set({apiToken:'ml_isolated_fixture',selectedJobId:1,serverUrl:'http://127.0.0.1:5000'})")
                 extension_page=context.new_page()
+                extension_page.on("pageerror",lambda error:errors.append(str(error)))
                 extension_page.goto(f"chrome-extension://{extension_id}/sidepanel.html")
                 expect(extension_page.locator("#connectionState")).to_have_text("工作台已连接")
                 expect(extension_page.locator("#inputApiToken")).to_have_value("ml_isolated_fixture")
+                extension_page.locator("#chatInput").fill("验证扩展本地组件")
+                expect(extension_page.locator(".ml-star-top")).to_have_css("animation-play-state", "running")
                 extension_page.locator("[data-panel=settings]").click()
                 expect(extension_page.locator("#inputServer")).to_be_visible()
                 fictional_page=context.new_page()
@@ -138,6 +169,7 @@ def main():
                 }""")
                 assert resume['success'] and '虚构' in resume['full_text']
                 assert observed and all(token=="ml_isolated_fixture" for token in observed)
+                assert not errors,errors
             finally:
                 context.close()
     print("PASS: token restore, onboarding, safe rendering, filters, background run, panel switching, confirmation, failed-submit retry, narrow sidebar layouts, actual MV3 load and content-script messaging")
